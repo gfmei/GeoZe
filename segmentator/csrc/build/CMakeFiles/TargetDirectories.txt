@@ -1,0 +1,7 @@
+/home/gmei/Documents/code/D3DLLM/segmentator/csrc/build/CMakeFiles/libsegmentator.dir
+/home/gmei/Documents/code/D3DLLM/segmentator/csrc/build/CMakeFiles/edit_cache.dir
+/home/gmei/Documents/code/D3DLLM/segmentator/csrc/build/CMakeFiles/rebuild_cache.dir
+/home/gmei/Documents/code/D3DLLM/segmentator/csrc/build/CMakeFiles/list_install_components.dir
+/home/gmei/Documents/code/D3DLLM/segmentator/csrc/build/CMakeFiles/install.dir
+/home/gmei/Documents/code/D3DLLM/segmentator/csrc/build/CMakeFiles/install/local.dir
+/home/gmei/Documents/code/D3DLLM/segmentator/csrc/build/CMakeFiles/install/strip.dir
