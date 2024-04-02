@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import open3d as o3d
 
-from common.scannet200_constants import SCANNET_COLOR_MAP_200, SCANNET_COLOR_MAP_2000
+from common.scannet200_constants import SCANNET_COLOR_MAP_200
 
 
 def get_colored_image_pca_sep(feature, name):

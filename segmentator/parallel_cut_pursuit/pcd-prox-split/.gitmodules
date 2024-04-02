@@ -1,9 +1,0 @@
-[submodule "grid-graph"]
-	path = grid-graph
-	url = https://gitlab.com/1a7r0ch3/grid-graph
-[submodule "matrix-tools"]
-	path = matrix-tools
-	url = https://gitlab.com/1a7r0ch3/matrix-tools
-[submodule "proj-simplex"]
-	path = proj-simplex
-	url = https://gitlab.com/1a7r0ch3/proj-simplex
