@@ -14,6 +14,7 @@ Technologies of Vision (TeV), Foundation Bruno Kessler &nbsp; &nbsp;
 
 ## News
 * We release the code for zero-shot 3D part segmentation 🔥.
+* Our paper has been accepted by CVPR 2024 🔥.
 
 
 ## Introduction
@@ -40,7 +41,7 @@ Prepare environment for part segmentation
 
 conda install pytorch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 pytorch-cuda=11.8 -c pytorch -c nvidia
 
-pip install clip
+pip install open-clip-torch==2.24.0
 
 ```
 
