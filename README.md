@@ -71,3 +71,8 @@ If you find our code or paper useful, please cite
   booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
   year      = {2024}
 ```
+
+## Acknowledgement
+
+This repo benefits from [PointCLIPV2](https://github.com/yangyangyang127/PointCLIP_V2), [CLIP](https://github.com/openai/CLIP), 
+and [OpenScene](https://github.com/pengsongyou/openscene). Thanks for their wonderful works.
