@@ -36,20 +36,20 @@ downstream tasks.
 ### Installation
 Prepare environment for part segmentation
 
-'''bash
+```bash
 
 conda install pytorch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 pytorch-cuda=11.8 -c pytorch -c nvidia
 
 pip install clip
 
-'''
+```
 
 ### Evaluation
  Part segmentation on ShapeNet
 
-'''bash
+```bash
 python part_run.py --datasetpath Your shapenet data path
-'''
+```
 
 ## TODO
 - [x] Provide code for part segmentation
