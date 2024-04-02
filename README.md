@@ -43,13 +43,15 @@ conda install pytorch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 pytorch-cuda=
 
 pip install open-clip-torch==2.24.0
 
+pip install open3d natsort matplotlib tqdm opencv-python scipy plyfile
+
 ```
 
 ### Evaluation
  Part segmentation on ShapeNet
 
 ```bash
-python part_run.py --datasetpath Your shapenet data path
+python part_run.py --datasetpath Your_shapenet_path
 ```
 
 ## TODO
