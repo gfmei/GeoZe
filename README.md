@@ -1,9 +1,10 @@
-# GeoZe: Geometrically-driven Aggregation for Zero-shot 3D Point Cloud Understanding
+# Geometrically-driven Aggregation for Zero-shot 3D Point Cloud Understanding
 
-Official implementation of [GeoZe](https://arxiv.org/abs/2312.02244).
+Official implementation of [Geometrically-driven Aggregation for Zero-shot 3D Point Cloud Understanding (GeoZe)](https://arxiv.org/abs/2312.02244).
 
 
-[Guofeng Mei](https://gfmei.github.io/),  Luigi Riz, Yiming Wang, Fabio Poiesi
+[Guofeng Mei](https://gfmei.github.io/),  [Luigi Riz](https://scholar.google.com/citations?user=djO2pVUAAAAJ), 
+[Yiming Wang](https://scholar.google.com/citations?user=KBZ3zrEAAAAJ), [Fabio Poiesi](https://scholar.google.com/citations?user=BQ7li6AAAAAJ)
 
 Technologies of Vision (TeV), Foundation Bruno Kessler &nbsp; &nbsp;
 
