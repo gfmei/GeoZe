@@ -1,0 +1,44 @@
+{
+ "scenes": [
+  {
+   "scene": "scene0606_01",
+   "band": "neutral",
+   "n_classes": 10,
+   "miou": {
+    "point": 0.4264,
+    "meanpool": 0.5435,
+    "semgeozev2": 0.504
+   },
+   "gain": -0.0395,
+   "points": 48956,
+   "file": "scene0606_01.json"
+  },
+  {
+   "scene": "scene0207_00",
+   "band": "typical",
+   "n_classes": 17,
+   "miou": {
+    "point": 0.412,
+    "meanpool": 0.4583,
+    "semgeozev2": 0.4551
+   },
+   "gain": -0.0031,
+   "points": 95706,
+   "file": "scene0207_00.json"
+  },
+  {
+   "scene": "scene0583_02",
+   "band": "good",
+   "n_classes": 10,
+   "miou": {
+    "point": 0.4296,
+    "meanpool": 0.4448,
+    "semgeozev2": 0.4663
+   },
+   "gain": 0.0215,
+   "points": 30097,
+   "file": "scene0583_02.json"
+  }
+ ],
+ "note": "scenes span the neutral/typical/good bands of the per-scene SemGeoZe-v2-minus-meanpool distribution"
+}
