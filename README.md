@@ -224,6 +224,17 @@ nuscenes_multiview_openseg_val/<scene>.pt          fused OpenSeg features (768-d
 
 We are very much welcome all kinds of contributions to the project.
 
+## Contributors
+
+The original GeoZe (CVPR 2024) is by Guofeng Mei, Luigi Riz, Yiming Wang and Fabio Poiesi.
+
+**SemGeoZe v2** (`semseg/`, `docs/`, `demo/`) was designed by
+[Guofeng Mei](https://gfmei.github.io/): the VCCS-guided parameter-free aggregation for scenes,
+the space-filling-curve serialization that replaces the KD-tree, and the multi-curve voting
+neighbour graph that makes it both cheaper and more accurate than exact kNN. The implementation,
+the evaluation harness and the ablations were produced with AI assistance (Claude Opus 4.8),
+including the adjacency-constrained hierarchical merging that the measurements converged on.
+
 ## Citation
 If you find our code or paper useful, please cite
 ```bibtex
