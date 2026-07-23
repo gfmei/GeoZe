@@ -1,0 +1,5 @@
+gradio>=4.44
+plotly>=5.20
+torch>=2.0
+numpy>=1.24
+scipy>=1.10

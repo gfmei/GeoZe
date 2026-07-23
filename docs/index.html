@@ -1,0 +1,430 @@
+<title>SemGeoZe v2 — zero-shot 3D scene segmentation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Training-free geometric aggregation for zero-shot 3D scene segmentation. Interactive ScanNet viewer, 26x faster than GeoZe.">
+
+<style>
+:root{
+  --ground:#0E1116; --panel:#161B22; --panel-2:#1C2430; --line:#242D3A;
+  --ink:#E6EAF0; --ink-2:#A7B2C2; --muted:#77839554;
+  --accent:#F0A030; --accent-ink:#1A1206;
+  --good:#5BC98C; --bad:#E8646B;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --sans:"Helvetica Neue",Helvetica,"Segoe UI",Roboto,system-ui,sans-serif;
+  --r:3px;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --ground:#F4F5F7; --panel:#FFFFFF; --panel-2:#EDEFF3; --line:#DDE1E8;
+    --ink:#161B22; --ink-2:#5A6472; --muted:#8B95A544;
+    --accent:#B26808; --accent-ink:#FFF6E8;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0E1116; --panel:#161B22; --panel-2:#1C2430; --line:#242D3A;
+  --ink:#E6EAF0; --ink-2:#A7B2C2; --muted:#77839554;
+  --accent:#F0A030; --accent-ink:#1A1206;
+}
+:root[data-theme="light"]{
+  --ground:#F4F5F7; --panel:#FFFFFF; --panel-2:#EDEFF3; --line:#DDE1E8;
+  --ink:#161B22; --ink-2:#5A6472; --muted:#8B95A544;
+  --accent:#B26808; --accent-ink:#FFF6E8;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+  font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+a{color:var(--accent)}
+
+/* ---------- masthead ---------- */
+header{border-bottom:1px solid var(--line);padding:34px 0 26px}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-2);margin:0 0 14px}
+h1{font-family:var(--mono);font-size:clamp(26px,4.4vw,40px);line-height:1.1;letter-spacing:-.02em;
+  margin:0 0 14px;text-wrap:balance;font-weight:600}
+h1 em{font-style:normal;color:var(--accent)}
+.lede{max-width:64ch;color:var(--ink-2);margin:0}
+.statbar{display:flex;flex-wrap:wrap;gap:28px;margin-top:24px}
+.stat .k{font-family:var(--mono);font-size:clamp(20px,3vw,27px);font-variant-numeric:tabular-nums;
+  letter-spacing:-.02em}
+.stat .l{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-2)}
+.stat.hero .k{color:var(--accent)}
+
+/* ---------- viewer ---------- */
+.viewer{margin:26px 0 8px;border:1px solid var(--line);border-radius:var(--r);
+  background:var(--panel);overflow:hidden}
+.vtop{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;
+  padding:10px 12px;border-bottom:1px solid var(--line);background:var(--panel-2)}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;padding:5px 9px;
+  border:1px solid var(--line);border-radius:var(--r);background:transparent;color:var(--ink-2);
+  cursor:pointer}
+.chip:hover{color:var(--ink);border-color:var(--ink-2)}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.chip:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+select{font-family:var(--mono);font-size:11.5px;padding:5px 8px;border-radius:var(--r);
+  border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+#stage{position:relative;height:min(60vh,540px);min-height:340px;background:var(--ground)}
+#gl{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+#gl.drag{cursor:grabbing}
+.hint{position:absolute;left:12px;bottom:10px;font-family:var(--mono);font-size:10.5px;
+  color:var(--ink-2);background:color-mix(in srgb,var(--panel) 78%,transparent);
+  padding:4px 7px;border-radius:var(--r);pointer-events:none}
+.readout{position:absolute;right:12px;top:10px;font-family:var(--mono);font-size:11px;
+  text-align:right;color:var(--ink-2);background:color-mix(in srgb,var(--panel) 78%,transparent);
+  padding:6px 9px;border-radius:var(--r);pointer-events:none;font-variant-numeric:tabular-nums}
+.readout b{color:var(--ink);font-weight:600}
+.vbot{display:flex;flex-wrap:wrap;gap:14px 26px;padding:11px 12px;border-top:1px solid var(--line);
+  background:var(--panel-2);font-family:var(--mono);font-size:11.5px;
+  font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.vbot b{color:var(--ink)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 12px;padding:11px 12px;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+.legend span{display:flex;align-items:center;gap:5px}
+.sw{width:9px;height:9px;border-radius:1px;flex:none}
+.cap{font-size:12.5px;color:var(--ink-2);margin:0 0 30px}
+
+/* ---------- content ---------- */
+section{padding:30px 0;border-top:1px solid var(--line)}
+h2{font-family:var(--mono);font-size:13px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink-2);margin:0 0 16px;font-weight:600}
+p{max-width:68ch}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:460px}
+th,td{text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums;font-family:var(--mono)}
+th:first-child,td:first-child{text-align:left}
+thead th{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-2);
+  border-bottom-color:var(--ink-2)}
+tbody tr.me td{background:color-mix(in srgb,var(--accent) 11%,transparent)}
+tbody tr.me td:first-child{box-shadow:inset 2px 0 var(--accent)}
+.delta.up{color:var(--good)} .delta.down{color:var(--bad)}
+.note{border-left:2px solid var(--accent);padding:2px 0 2px 14px;margin:18px 0;
+  color:var(--ink-2);font-size:14px;max-width:66ch}
+.bars{display:flex;flex-direction:column;gap:7px;margin:4px 0 18px;max-width:640px}
+.bar{display:grid;grid-template-columns:160px 1fr auto;gap:11px;align-items:center;
+  font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+.bar .t{height:9px;border-radius:1px;background:var(--panel-2);overflow:hidden}
+.bar .f{height:100%;background:var(--ink-2)}
+.bar.me .f{background:var(--accent)}
+.bar .n{color:var(--ink-2)}
+.bar.me .n{color:var(--ink)}
+footer{padding:26px 0 46px;color:var(--ink-2);font-size:12.5px}
+@media (max-width:640px){
+  .bar{grid-template-columns:110px 1fr auto}
+  .statbar{gap:18px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">GeoZe · CVPR 2024 · scene-level extension</p>
+  <h1>Zero-shot 3D segmentation,<br><em>26&times; faster</em> aggregation</h1>
+  <p class="lede">SemGeoZe v2 refines a vision–language model's per-point features using only the
+  point cloud's geometry — no training, no parameters. Spin the scan below and switch between
+  what the VLM says per point, what plain region averaging says, and what SemGeoZe v2 says.</p>
+  <div class="statbar">
+    <div class="stat hero"><div class="k">81.89 ms</div><div class="l">per scene &middot; A100</div></div>
+    <div class="stat"><div class="k">25.9&times;</div><div class="l">vs GeoZe 2125.61 ms</div></div>
+    <div class="stat"><div class="k">0.5606</div><div class="l">ScanNet val mIoU</div></div>
+    <div class="stat"><div class="k">312</div><div class="l">scenes evaluated</div></div>
+  </div>
+</header>
+
+<div class="viewer">
+  <div class="vtop">
+    <div class="chips" role="group" aria-label="Colour mode">
+      <button class="chip" data-mode="rgb">scan RGB</button>
+      <button class="chip" data-mode="gt">ground truth</button>
+      <button class="chip" data-mode="point">per-point VLM</button>
+      <button class="chip" data-mode="meanpool">region mean</button>
+      <button class="chip" data-mode="semgeozev2" aria-pressed="true">SemGeoZe v2</button>
+      <button class="chip" data-mode="region">merged regions</button>
+      <button class="chip" data-mode="err">errors</button>
+    </div>
+    <label style="display:flex;gap:7px;align-items:center;font-family:var(--mono);font-size:11px;color:var(--ink-2)">
+      scene <select id="scenesel"></select>
+    </label>
+  </div>
+  <div id="stage">
+    <canvas id="gl"></canvas>
+    <div class="readout" id="readout">loading…</div>
+    <div class="hint">drag to orbit · wheel to zoom · shift-drag to pan</div>
+  </div>
+  <div class="vbot" id="vbot"></div>
+  <div class="legend" id="legend"></div>
+</div>
+<p class="cap">Points are voxel-downsampled to ~3.5&nbsp;cm for the browser; every number is
+computed on the full-resolution scan. <span id="bandnote"></span></p>
+
+<section>
+  <h2>Where the time goes</h2>
+  <p>GeoZe builds a <span style="font-family:var(--mono)">knn</span> patch around every superpoint
+  and runs Sinkhorn attention inside each one. SemGeoZe v2 never attends inside a region: it
+  <strong>agglomerates the partition</strong>, merging adjacent regions in mutual-best-match pairs
+  when they agree both semantically and geometrically. Every step is a scatter-reduce over one
+  edge list, and the neighbour graph comes from multi-curve voting over eight space-filling
+  curves rather than a KD-tree.</p>
+  <div class="bars" id="speedbars"></div>
+  <p class="cap" style="margin:0">Aggregation only — per-point features in, refined features out.
+  The two GeoZe/OpenScene rows are quoted from Table&nbsp;6 of the paper and were measured on the
+  authors' hardware, so the ratio is indicative rather than a controlled comparison.</p>
+</section>
+
+<section>
+  <h2>ScanNet v2 validation · all 312 scenes</h2>
+  <div class="tw"><table>
+    <thead><tr><th>method</th><th>mIoU</th><th>mAcc</th><th>OA</th><th>time</th></tr></thead>
+    <tbody>
+      <tr><td>per-point VLM features</td><td>0.4972</td><td>0.6346</td><td>0.7598</td><td>—</td></tr>
+      <tr><td>region mean pooling</td><td>0.5564</td><td>0.6834</td><td>0.8147</td><td>1.60 ms</td></tr>
+      <tr class="me"><td>SemGeoZe v2</td><td>0.5606</td><td>0.6856</td><td>0.8143</td><td>81.89 ms</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">The honest reading: SemGeoZe v2 <strong>improves region mean pooling by
+  +0.43&nbsp;mIoU</strong> and is far cheaper than GeoZe's scene pipeline — but +0.43 is a small
+  gain, and on nuScenes the merge is neutral (0.2947 vs 0.2995, reaching parity at
+  <span style="font-family:var(--mono)">th_f&nbsp;0.98</span>). Speed is the contribution;
+  accuracy is parity-plus-a-little. Per-scene results vary in both directions, which is why the
+  viewer above ships a neutral, a typical and a good scene rather than three favourable ones.</div>
+</section>
+
+<section>
+  <h2>Two things a reader should know</h2>
+  <p><strong>ScanNet's mesh over-segmentation is label-perfect.</strong> Assigning each segment its
+  dominant ground-truth label scores mIoU exactly 1.000, because ScanNet's annotators labelled
+  those very segments. Part of the per-point&nbsp;&rarr;&nbsp;per-region jump is therefore an
+  annotation artefact rather than a method gain. Running on a VCCS partition instead removes the
+  leak and costs about 3.4&nbsp;mIoU.</p>
+  <p><strong>Most of the remaining headroom is not aggregation.</strong> Pooling over the
+  <em>ground-truth</em> region — a perfect partition — still only reaches 0.6845 mIoU. So of the
+  gap to the oracle, roughly 21 points are VLM/text misalignment that no aggregation can close and
+  only ~13 are reachable at all.</p>
+</section>
+
+<footer class="wrap" style="padding-left:0;padding-right:0">
+  Built on <a href="https://github.com/pengsongyou/openscene">OpenScene</a> fused LSeg features and
+  the ScanNet v2 validation split. Code, ablations and raw results:
+  <a href="https://github.com/gfmei/GeoZe">github.com/gfmei/GeoZe</a>.
+</footer>
+</div>
+
+<script>
+const SPEED=[["OpenScene (paper Tab. 6)",2088.72,0],["GeoZe (paper Tab. 6)",2125.61,0],
+             ["SemGeoZe v2 · KD-tree graph",113.75,0],["SemGeoZe v2 · multi-curve voting",81.89,1]];
+(function(){
+  const max=Math.max(...SPEED.map(s=>s[1]));
+  document.getElementById("speedbars").innerHTML=SPEED.map(([n,v,me])=>
+    `<div class="bar${me?" me":""}"><span class="n">${n}</span>
+     <span class="t"><span class="f" style="width:${Math.max(v/max*100,0.9)}%"></span></span>
+     <span>${v.toFixed(2)} ms</span></div>`).join("");
+})();
+
+/* ---------------- tiny mat4 ---------------- */
+const M={
+  persp:(f,a,n,fa)=>{const t=1/Math.tan(f/2),d=1/(n-fa);
+    return [t/a,0,0,0, 0,t,0,0, 0,0,(fa+n)*d,-1, 0,0,2*fa*n*d,0];},
+  look:(e,c,u)=>{const s=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]],
+    nz=v=>{const l=Math.hypot(...v)||1;return[v[0]/l,v[1]/l,v[2]/l]},
+    cr=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],
+    dt=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+    const z=nz(s(e,c)),x=nz(cr(u,z)),y=cr(z,x);
+    return [x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0,
+            -dt(x,e),-dt(y,e),-dt(z,e),1];},
+  mul:(a,b)=>{const o=new Array(16);
+    for(let i=0;i<4;i++)for(let j=0;j<4;j++){let s=0;
+      for(let k=0;k<4;k++)s+=a[k*4+j]*b[i*4+k];o[i*4+j]=s;}
+    return o;}
+};
+
+/* ---------------- viewer ---------------- */
+const cv=document.getElementById("gl");
+const gl=cv.getContext("webgl2",{antialias:true,alpha:false});
+let prog,buf={},scene=null,mode="semgeozev2",cam={az:0.7,el:0.42,d:1.9,tx:0,ty:0};
+
+if(!gl){document.getElementById("stage").innerHTML=
+  '<p style="padding:24px;font-family:var(--mono);font-size:13px">This viewer needs WebGL2.</p>';}
+
+function sh(t,src){const s=gl.createShader(t);gl.shaderSource(s,src);gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(s));return s;}
+
+function init(){
+  const vs=`#version 300 es
+  in vec3 p; in vec3 c; uniform mat4 mvp; uniform float ps;
+  out vec3 vc;
+  void main(){ vc=c; vec4 q=mvp*vec4(p,1.0); gl_Position=q;
+    gl_PointSize=clamp(ps/max(q.w,0.05),1.0,7.0); }`;
+  const fs=`#version 300 es
+  precision mediump float; in vec3 vc; out vec4 o;
+  void main(){ vec2 d=gl_PointCoord-0.5; if(dot(d,d)>0.25) discard; o=vec4(vc,1.0); }`;
+  prog=gl.createProgram();
+  gl.attachShader(prog,sh(gl.VERTEX_SHADER,vs));
+  gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,fs));
+  gl.bindAttribLocation(prog,0,"p"); gl.bindAttribLocation(prog,1,"c");
+  gl.linkProgram(prog); gl.useProgram(prog);
+  buf.p=gl.createBuffer(); buf.c=gl.createBuffer();
+  gl.enable(gl.DEPTH_TEST);
+}
+
+const dec=s=>{const b=atob(s),u=new Uint8Array(b.length);
+  for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u;};
+
+function palette(id){                       /* stable pseudo-random hue per region */
+  const h=(id*2654435761)>>>0;
+  const a=(h&255)/255, b=((h>>8)&255)/255, c=((h>>16)&255)/255;
+  return [0.32+0.55*a, 0.32+0.55*b, 0.32+0.55*c];
+}
+
+function colours(){
+  const n=scene.n, out=new Float32Array(n*3), C=scene.colors;
+  const src={gt:scene.gt,point:scene.point,meanpool:scene.meanpool,semgeozev2:scene.semgeozev2}[mode];
+  for(let i=0;i<n;i++){
+    let r,g,b;
+    if(mode==="rgb"){ r=scene.rgb[i*3]/255; g=scene.rgb[i*3+1]/255; b=scene.rgb[i*3+2]/255; }
+    else if(mode==="region"){ [r,g,b]=palette(scene.region[i]); }
+    else if(mode==="err"){
+      const t=scene.gt[i];
+      if(t===255){ r=g=b=0.24; }
+      else if(scene.semgeozev2[i]===t){ r=0.20;g=0.42;b=0.29; }
+      else { r=0.91;g=0.39;b=0.42; }
+    } else {
+      const k=src[i];
+      if(k===255){ r=g=b=0.24; }
+      else { const c=C[k]; r=c[0]/255; g=c[1]/255; b=c[2]/255; }
+    }
+    out[i*3]=r; out[i*3+1]=g; out[i*3+2]=b;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER,buf.c);
+  gl.bufferData(gl.ARRAY_BUFFER,out,gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,3,gl.FLOAT,false,0,0);
+  legend();
+}
+
+function legend(){
+  const el=document.getElementById("legend");
+  if(mode==="rgb"){ el.innerHTML='<span>true colour from the RGB-D scan</span>'; return; }
+  if(mode==="region"){
+    el.innerHTML=`<span>${scene.n_regions_in} input segments merged to
+      <b style="color:var(--ink)">${scene.n_regions_out}</b> regions · colour is region identity</span>`;
+    return;
+  }
+  if(mode==="err"){
+    el.innerHTML='<span><i class="sw" style="background:#34694a"></i>SemGeoZe v2 correct</span>'+
+      '<span><i class="sw" style="background:#e86369"></i>wrong</span>'+
+      '<span><i class="sw" style="background:#3d3d3d"></i>unlabelled</span>';
+    return;
+  }
+  const src={gt:scene.gt,point:scene.point,meanpool:scene.meanpool,semgeozev2:scene.semgeozev2}[mode];
+  const cnt=new Map();
+  for(let i=0;i<scene.n;i++){const k=src[i]; if(k!==255)cnt.set(k,(cnt.get(k)||0)+1);}
+  el.innerHTML=[...cnt.entries()].sort((a,b)=>b[1]-a[1]).slice(0,12).map(([k])=>{
+    const c=scene.colors[k];
+    return `<span><i class="sw" style="background:rgb(${c[0]},${c[1]},${c[2]})"></i>${scene.classes[k]}</span>`;
+  }).join("");
+}
+
+function draw(){
+  if(!scene)return;
+  const dpr=Math.min(devicePixelRatio||1,2);
+  const w=cv.clientWidth*dpr|0, h=cv.clientHeight*dpr|0;
+  if(cv.width!==w||cv.height!==h){cv.width=w;cv.height=h;}
+  gl.viewport(0,0,w,h);
+  const g=getComputedStyle(document.body).backgroundColor.match(/\d+/g).map(Number);
+  gl.clearColor(g[0]/255,g[1]/255,g[2]/255,1);
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  const ce=Math.cos(cam.el),se=Math.sin(cam.el);
+  const eye=[cam.d*ce*Math.cos(cam.az), cam.d*ce*Math.sin(cam.az), cam.d*se];
+  const tgt=[cam.tx,cam.ty,0];
+  const mvp=M.mul(M.persp(0.9,cv.width/cv.height,0.01,60),
+                  M.look([eye[0]+tgt[0],eye[1]+tgt[1],eye[2]+tgt[2]],tgt,[0,0,1]));
+  gl.uniformMatrix4fv(gl.getUniformLocation(prog,"mvp"),false,new Float32Array(mvp));
+  gl.uniform1f(gl.getUniformLocation(prog,"ps"),1.9*dpr);
+  gl.drawArrays(gl.POINTS,0,scene.n);
+}
+
+function load(d){
+  const q=new Int16Array(dec(d.xyz).buffer);
+  const n=d.n_points;
+  const p=new Float32Array(n*3);
+  let mx=0;
+  for(let i=0;i<n*3;i++){const v=q[i]*d.scale; p[i]=v; if(Math.abs(v)>mx)mx=Math.abs(v);}
+  for(let i=0;i<n*3;i++)p[i]/=mx;                       /* normalise into a unit-ish box */
+  scene={...d,n,pos:p,rgb:dec(d.rgb),gt:dec(d.gt),point:dec(d.point),
+    meanpool:dec(d.meanpool),semgeozev2:dec(d.semgeozev2),
+    region:new Uint16Array(dec(d.region).buffer)};
+  gl.bindBuffer(gl.ARRAY_BUFFER,buf.p);
+  gl.bufferData(gl.ARRAY_BUFFER,p,gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+  colours();
+  const m=d.miou;
+  document.getElementById("vbot").innerHTML=
+    `<span>scene <b>${d.scene}</b></span>
+     <span>points <b>${d.n_points_full.toLocaleString()}</b></span>
+     <span>segments <b>${d.n_regions_in}</b> &rarr; <b>${d.n_regions_out}</b></span>
+     <span>scene mIoU · per-point <b>${m.point.toFixed(3)}</b>
+       · region mean <b>${m.meanpool.toFixed(3)}</b>
+       · SemGeoZe v2 <b>${m.semgeozev2.toFixed(3)}</b>
+       <span class="delta ${m.semgeozev2>=m.meanpool?"up":"down"}">
+       (${(m.semgeozev2-m.meanpool>=0?"+":"")}${(m.semgeozev2-m.meanpool).toFixed(3)})</span></span>`;
+  document.getElementById("readout").innerHTML=`<b>${mode}</b><br>${n.toLocaleString()} points shown`;
+  draw();
+}
+
+function setMode(m){
+  mode=m;
+  document.querySelectorAll(".chip").forEach(c=>
+    c.setAttribute("aria-pressed", String(c.dataset.mode===m)));
+  if(scene){colours();
+    document.getElementById("readout").innerHTML=
+      `<b>${m}</b><br>${scene.n.toLocaleString()} points shown`;
+    draw();}
+}
+document.querySelectorAll(".chip").forEach(c=>c.onclick=()=>setMode(c.dataset.mode));
+
+/* orbit / pan / zoom */
+let drag=null;
+cv.addEventListener("pointerdown",e=>{drag={x:e.clientX,y:e.clientY,s:e.shiftKey};
+  cv.setPointerCapture(e.pointerId);cv.classList.add("drag");});
+cv.addEventListener("pointerup",e=>{drag=null;cv.classList.remove("drag");});
+cv.addEventListener("pointermove",e=>{
+  if(!drag)return;
+  const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+  drag.x=e.clientX; drag.y=e.clientY;
+  if(drag.s){cam.tx-=dx*0.0022*cam.d; cam.ty+=dy*0.0022*cam.d;}
+  else{cam.az-=dx*0.008; cam.el=Math.max(-1.45,Math.min(1.45,cam.el+dy*0.008));}
+  draw();
+});
+cv.addEventListener("wheel",e=>{e.preventDefault();
+  cam.d=Math.max(0.4,Math.min(7,cam.d*(1+Math.sign(e.deltaY)*0.09)));draw();},{passive:false});
+addEventListener("resize",draw);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",draw);
+new MutationObserver(draw).observe(document.documentElement,{attributes:true,
+  attributeFilter:["data-theme"]});
+
+/* boot */
+if(gl){
+  init();
+  const sel=document.getElementById("scenesel");
+  const inline=window.__SCENES__;
+  const boot=(man)=>{
+    sel.innerHTML=man.scenes.map(s=>
+      `<option value="${s.file}">${s.scene} · ${s.band}</option>`).join("");
+    document.getElementById("bandnote").textContent=
+      "The three scenes span the neutral, typical and good bands of the per-scene "+
+      "SemGeoZe v2-minus-mean-pooling distribution — not the three best.";
+    const pick=f=>{
+      const rec=man.scenes.find(s=>s.file===f);
+      if(inline&&inline.data&&inline.data[f]){load(inline.data[f]);return;}
+      fetch("scenes/"+f).then(r=>r.json()).then(load)
+        .catch(()=>{document.getElementById("readout").textContent="could not load scene";});
+    };
+    sel.onchange=()=>pick(sel.value);
+    sel.value=man.scenes[1]?man.scenes[1].file:man.scenes[0].file;
+    pick(sel.value);
+  };
+  if(inline) boot(inline.manifest);
+  else fetch("scenes/manifest.json").then(r=>r.json()).then(boot)
+    .catch(()=>{document.getElementById("readout").textContent="could not load scenes/manifest.json";});
+}
+</script>

@@ -1,0 +1,127 @@
+---
+title: SemGeoZe v2
+emoji: 🧊
+colorFrom: gray
+colorTo: yellow
+sdk: gradio
+sdk_version: 4.44.0
+app_file: app.py
+pinned: false
+license: mit
+---
+
+# SemGeoZe v2 — training-free 3D scene segmentation
+
+Interactive demo for the scene-level extension of
+[GeoZe (CVPR 2024)](https://arxiv.org/abs/2312.02244).
+
+The 2D→3D feature fusion is precomputed and baked into `data/*.npz`; what runs on each request is
+the **training-free geometric aggregation itself** — 82 ms/scene on an A100, a couple of seconds
+on this Space's CPU, against 2125.61 ms for GeoZe's scene pipeline (paper Table 6).
+
+## Using it
+
+Pick a scene, choose a view, move the sliders, press **Run SemGeoZe v2**. The readout reports how
+many regions the merge produced, how long the aggregation took, and that scene's mIoU for all
+three methods.
+
+| control | what it does |
+|---|---|
+| `th_f` | semantic merge threshold — two adjacent regions may merge only if their feature cosine is at least this. **The one to play with.** |
+| `th_n` | geometric threshold — mean normal agreement and the boundary gate must both clear it |
+| `rounds` | depth of the mutual-best-match hierarchy; each round can at most halve the region count |
+| view | `SemGeoZe v2` / `region mean pooling` / `ground truth` / `merged regions` |
+
+**Try this first.** Set `th_f = 1.00`: nothing merges, the region count stays put, and SemGeoZe v2's
+mIoU becomes *exactly* the region-mean-pooling number — the method reduces to its own baseline, so
+you can confirm the baseline is real rather than a number in a table. Now drag `th_f` down to 0.85
+and watch the region count collapse (2149 → 499 on `scene0207_00`) while mIoU moves a little.
+
+Switch to **merged regions** while dragging to see which segments coalesce. That is the whole
+method: enlarge the pooling support wherever geometry and semantics agree, never average across a
+boundary they don't.
+
+Lower `th_f` past ~0.7 and quality degrades — over-merging fuses genuinely different objects. The
+shipped default is 0.85.
+
+## Numbers
+
+ScanNet v2 val, all 312 scenes, LSeg features, mesh segments:
+
+| method | mIoU | mAcc | OA | aggregation |
+|---|---|---|---|---|
+| per-point VLM features | 0.4972 | 0.6346 | 0.7598 | — |
+| region mean pooling | 0.5564 | 0.6834 | 0.8147 | 1.60 ms |
+| **SemGeoZe v2** | **0.5606** | **0.6856** | 0.8143 | 81.89 ms |
+
+SemGeoZe v2 improves region mean pooling by +0.43 mIoU on ScanNet and reaches parity on nuScenes
+(0.2947 vs 0.2995; 0.2995 at `th_f` 0.98). Speed is the contribution; accuracy is parity plus a
+little. Per-scene the gain moves in both directions — the bundled scenes span the neutral, typical
+and good bands rather than three favourable ones, so some of them will show a *negative* delta.
+
+Two caveats worth knowing: ScanNet's mesh over-segmentation is label-perfect by construction
+(oracle mIoU exactly 1.000, since annotators labelled those segments), and pooling over the
+*ground-truth* region still reaches only 0.6845 — most of the remaining headroom is VLM/text
+misalignment, not aggregation.
+
+## Running locally
+
+```bash
+pip install -r demo/requirements.txt
+python demo/pack_space_data.py --scenes scene0207_00 scene0583_02 scene0606_01 --voxel 0.06
+cd demo && python app.py           # http://127.0.0.1:7860
+```
+
+`pack_space_data.py` needs the ScanNet data and the `semseg/` package; the Space itself needs
+neither — `data/*.npz` carries the geometry, the partition and the fused features, and
+`semgeozev2.py` is a dependency-free single-file build of the model.
+
+## Deploying to a Space
+
+```bash
+pip install huggingface_hub && huggingface-cli login
+
+huggingface-cli repo create semgeoze-v2 --type space --space_sdk gradio
+git clone https://huggingface.co/spaces/<user>/semgeoze-v2 && cd semgeoze-v2
+
+cp ../demo/{app.py,semgeozev2.py,requirements.txt,README.md} .
+cp -r ../demo/serialization ../demo/data .
+
+git lfs install && git lfs track "data/*.npz"
+git add -A && git commit -m "SemGeoZe v2 demo" && git push
+```
+
+`data/` is ~62 MB, so **`git lfs track` before the first `git add`** — pushing it as plain blobs
+will be rejected. The Space builds in a couple of minutes on the free CPU tier.
+
+Point the app at a hosted dataset instead of bundled files by setting `GEOZE_DATA` to a
+snapshot path — useful for shipping more scenes than a Space repo should carry.
+
+## Adding scenes
+
+```bash
+python demo/pack_space_data.py --scenes scene0011_00 scene0025_00 --voxel 0.06
+```
+
+`--voxel` trades responsiveness for fidelity. At 0.06 m a scene is 11–36k points and 11–35 MB;
+at 0.03 m it is roughly 4× both, which a free CPU Space will not enjoy. Whatever the downsample,
+the mIoU shown is computed on the points the Space actually holds — so it will differ slightly
+from the full-resolution numbers in the table above.
+
+## Rebuilding the packed model
+
+`semgeozev2.py` is generated from `semseg/` — edit the package, not the packed file:
+
+```bash
+python demo/pack_space.py
+```
+
+## Troubleshooting
+
+- **Slow first request** — the Space cold-starts and `demo.load` runs the model once on boot.
+  Expect ~10 s on free CPU; subsequent requests are 2–5 s.
+- **`No scenes found`** — `data/*.npz` did not reach the Space, almost always an LFS mistake.
+  Check with `git lfs ls-files`.
+- **Out of memory on free CPU** — re-pack with a coarser `--voxel`, or ship fewer scenes.
+
+Code and full ablations: [github.com/gfmei/GeoZe](https://github.com/gfmei/GeoZe)
