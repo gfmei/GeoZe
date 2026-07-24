@@ -5,3 +5,4 @@ partseg/output/
 logs/
 .idea/
 demo/data/
+demo/serialization/

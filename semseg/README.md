@@ -26,8 +26,10 @@ semseg/
     common.py           segment-reduction helpers
     vccs.py             Voxel Cloud Connectivity Segmentation
     curve.py            multi-curve voting kNN graph
-    serialization/      space-filling curve codes (z / Hilbert)
 ```
+
+Space-filling curve codes live in [`libs/serialization/`](../libs/serialization) — one shared copy,
+imported by `semmodel/curve.py` and vendored into `demo/` at pack time.
 
 ## Usage
 

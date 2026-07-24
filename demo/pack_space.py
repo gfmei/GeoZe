@@ -2,7 +2,9 @@
 
 A HuggingFace Space should not need the repo's import chain, open3d, or a GPU. This concatenates
 the parts of `semseg/` the Space actually runs (metrics, segment helpers, the neighbour graph, the
-model) into one module, stripping the intra-package imports.
+model) into one module, stripping the intra-package imports, and vendors `libs/serialization`
+next to it. Both outputs are build artifacts — they are gitignored, and `libs/` is the only
+tracked copy.
 
 Edit `semseg/`, never `demo/semgeozev2.py`, then re-run:
 
@@ -10,6 +12,7 @@ Edit `semseg/`, never `demo/semgeozev2.py`, then re-run:
 """
 import os
 import re
+import shutil
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -81,7 +84,13 @@ def main():
     compile(src, OUT, 'exec')                      # fail loudly rather than ship a broken Space
     open(OUT, 'w').write(src)
     print(f'wrote {OUT}  ({len(src.splitlines())} lines)')
-    print('reminder: demo/serialization/ must be copied alongside it')
+
+    # the Space has no repo to import from, so vendor the shared package flat next to the model
+    dst = os.path.join(ROOT, 'demo', 'serialization')
+    shutil.rmtree(dst, ignore_errors=True)
+    shutil.copytree(os.path.join(ROOT, 'libs', 'serialization'), dst,
+                    ignore=shutil.ignore_patterns('__pycache__'))
+    print(f'vendored {dst} from libs/serialization')
 
 
 if __name__ == '__main__':

@@ -17,14 +17,9 @@ Measured on ScanNet val: ~35% faster than scipy's cKDTree (71 vs 109 ms/scene) a
 accuracy on full val.  The KD-tree remains the default in best_param because it was very
 slightly ahead there (+0.43 vs +0.21 mIoU); use `--curve` to switch.
 """
-import os
-import sys
-
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from serialization import encode  # noqa: E402
+from libs.serialization import encode
 
 ORDERS = ('z', 'z-trans', 'hilbert', 'hilbert-trans')
 CURVES = tuple((o, s) for s in (0.0, 0.5) for o in ORDERS)

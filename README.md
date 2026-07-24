@@ -17,7 +17,7 @@ Technologies of Vision (TeV), Foundation Bruno Kessler &nbsp; &nbsp;
 
 Two ways to see the method run, both documented end to end.
 
-**[Interactive scan viewer &rarr; gfmei.github.io/GeoZe](https://gfmei.github.io/GeoZe/)**
+**[Interactive scan viewer &rarr; Demo](https://gfmei.github.io/GeoZe/)**
 &nbsp;·&nbsp; source in [`docs/`](docs/README.md)
 
 Orbit a real ScanNet scan and switch between the raw scan, the ground truth, per-point VLM
