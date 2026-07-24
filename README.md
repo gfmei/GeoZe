@@ -104,10 +104,22 @@ Breakdown for the voting variant: 38.98 ms graph + 42.91 ms aggregation. Swappin
 KD-tree for multi-curve voting nearly **halves** the graph cost (70.43 -> 38.98 ms) at equal
 accuracy. On nuScenes (344k points/scan) the same pipeline runs in 173.50 ms.
 
-*Caveat:* the two paper rows are quoted from Table 6 and were measured on the authors' hardware,
-so the ratio is indicative rather than a controlled comparison. The algorithmic difference —
-per-superpoint $knn$ patches plus Sinkhorn attention, versus scatter-reduces over one edge list —
-is what the numbers reflect.
+*Caveat:* the two paper rows are quoted from Table 6 and were measured on the authors' hardware.
+To get a controlled number, `semseg/bench_geoze.py` runs GeoZe's own aggregation
+(`partseg/partmodel/partgeoze.py`, unmodified) on ScanNet scenes on the **same A100**:
+
+| scene points | superpoints | GeoZe |
+|---|---|---|
+| 5,000 (33x subsampled) | 128 | 202.00 ms |
+| 20,000 (8x subsampled) | 128 | 215.63 ms |
+| 40,000 (4x subsampled) | 128 | 380.00 ms |
+| 40,000 (4x subsampled) | 256 | 654.51 ms |
+
+GeoZe needs a **4x subsampled** scene to reach 380 ms; SemGeoZe v2 does the **full-resolution**
+166k-point scene in 81.89 ms. The dense per-superpoint patches do not fit a whole scene at all,
+which is the structural reason the scene pipeline is expensive. (This uses GeoZe's released
+object-level configuration — the scene configuration behind Table 6 was never published — so read
+it as same-hardware corroboration of the order of magnitude, not as a reproduction of 2125.61 ms.)
 
 ### Accuracy
 
@@ -134,8 +146,21 @@ averaging the fused VLM features inside each region.)
 | SemGeoZe v2 (`th_f` 0.98) | 0.2995 | 0.5136 | 0.6103 |
 
 SemGeoZe v2 improves the baseline by **+0.43 mIoU** on ScanNet and **reaches parity** on nuScenes,
-while running ~26x faster than GeoZe's scene pipeline. The aggregation is what got cheap, not what
-got more accurate — we state the gain as the small, reproducible number it is.
+while running far faster than GeoZe's scene pipeline.
+
+**How solid is +0.43?** mIoU is pooled over the whole split, so it has no error bar by
+construction. Bootstrapping the 312 scenes (`semseg/variance.py`, B=2000) gives:
+
+| | mIoU | bootstrap sd |
+|---|---|---|
+| region mean pooling | 0.5564 | ±0.0105 |
+| SemGeoZe v2 | 0.5606 | ±0.0108 |
+| **difference** | **+0.0043** | **±0.0022**, 95% CI **[−0.0001, +0.0087]** |
+
+P(difference > 0) = 0.973, and a 156-scene split-half moves it over [−0.0020, +0.0119]. So the
+gain is **positive in 97.3% of resamples but its 95% interval just includes zero** — it does not
+clear a two-sided 95% test, and it should be described as parity-to-slightly-better, never as a
+headline accuracy result. The speed is the contribution.
 
 Two caveats a reader should have. ScanNet's mesh over-segmentation is *label-perfect* by
 construction (annotators labelled those very segments, so oracle mIoU is exactly 1.000), and

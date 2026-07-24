@@ -46,6 +46,8 @@ python semseg/sem_run.py --dataset nuscenes
 python semseg/sem_run.py --dataset nuscenes --baseline meanpool
 
 python semseg/bench_speed.py --dataset scannet   # reproduce the inference-time table
+python semseg/bench_geoze.py                     # time GeoZe's own aggregation on the same GPU
+python semseg/variance.py --boot 2000            # bootstrap error bars on the gain
 ```
 
 ## Inference time (one A100, aggregation only)
@@ -111,8 +113,12 @@ principle that survived measurement is narrower than "attention helps":
   is irreducible LSeg/text misalignment; only ~13 is reachable by any aggregation.
 - `shower curtain` scores 0.000 and cannot be fixed from the text side — 87% of its points are
   predicted `curtain`; prompt ensembles and disambiguated names both made things worse.
-- **+0.43 mIoU is small.** Subsets of ≤52 scenes swing mIoU by ±1, and several designs that looked
-  like +1.5 there landed at ~0 on full val. Always evaluate on all 312 (~4 min on one A100).
+- **+0.43 mIoU does not clear a 95% test.** Bootstrapping the 312 scenes (`semseg/variance.py`,
+  B=2000) gives a difference of +0.0043 ± 0.0022, 95% CI [−0.0001, +0.0087], P(>0) = 0.973.
+  Positive in 97.3% of resamples, but the interval includes zero. Report it as parity-to-slightly-
+  better; the speed is the contribution.
+- Subsets of ≤52 scenes swing mIoU by ±1, and several designs that looked like +1.5 there landed
+  at ~0 on full val. Always evaluate on all 312 (~4 min on one A100).
 
 ## Where these numbers come from
 
@@ -125,6 +131,8 @@ The per-stage and per-graph ablations behind the tables above are kept as raw re
 | `ablation_stages_mesh.json` | point / meanpool / intra / intra+inter / hier / hier+intra, mesh segments |
 | `ablation_stages_vccs.json` | the same ladder on the VCCS partition |
 | `ablation_graph_vote_vs_kdtree.json` | KD-tree vs multi-curve voting at `min_votes` 4/5/6 |
+| `variance.json` | bootstrap + split-half error bars on the gain |
+| `per_scene_conf.npz` | per-scene confusion matrices, so the bootstrap can be re-run instantly |
 
 Each entry stores mIoU, mAcc, OA and the 20 per-class IoUs, so the claims above can be checked
 without re-running anything.
