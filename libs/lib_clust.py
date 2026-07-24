@@ -1,28 +1,8 @@
-import copy
-
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-try:
-    import segmentator
-    from torch_cluster import knn_graph
-except Exception as e:
-    pass
-
 from libs.lib_utils import farthest_point_sample, index_points, sinkhorn, angle_difference, get_prototype
-
-
-def graph_cut_clustering(points, normals, thres=0.01, k=50, seg_min_verts=20):
-    if points.dim() == 2:
-        points = points.unsqueeze(0)
-        normals = normals.unsqueeze(0)
-    superpoints = list()
-    for point, normal in zip(points, normals):
-        edges = knn_graph(point, k=k).T
-        index = segmentator.segment_point(point, normal, edges, kThresh=thres, segMinVerts=seg_min_verts)
-        superpoints.append(index)
-    return torch.cat(superpoints, dim=0)
 
 
 def pairwise_histogram_distance_pytorch(hist1, hist2):
@@ -55,40 +35,6 @@ def pairwise_histogram_distance_pytorch(hist1, hist2):
     sum1 = torch.sum(hist1, dim=-1, keepdim=True)  # Shape [B, N, 1]
     sum2 = torch.sum(hist2, dim=-1, keepdim=True)  # Shape [B, 1, M]
     max_sum = torch.min(sum1, sum2.transpose(1, 2))  # Shape [B, N, M]
-
-    normalized_intersections = intersections / max_sum
-    distance_matrix = 1 - normalized_intersections
-
-    return distance_matrix
-
-
-def pairwise_histogram_distance_optimized(hist1, hist2):
-    """
-    Calculate the pairwise histogram intersection distance between each point in A to every point in B,
-    optimized to reduce explicit for loops.
-
-    Parameters:
-    - histograms_A: Histograms for each point in point cloud A (shape: [N, D]).
-    - histograms_B: Histograms for each point in point cloud B (shape: [M, D]).
-
-    Returns:
-    - distance_matrix: A matrix of distances where element (i, j) is the distance from the i-th point in A to the j-th point in B.
-    """
-    # Expand histograms_A and histograms_B to 3D tensors for broadcasting
-    # histograms_A: [N, 1, D], histograms_B: [1, M, D]
-    hist1_exp = hist1[:, np.newaxis, :]
-    hist2_exp = hist2[np.newaxis, :, :]
-
-    # Calculate minimum of each pair of histograms (using broadcasting), resulting in a [N, M, D] tensor
-    minima = np.minimum(hist1_exp, hist2_exp)
-
-    # Sum over the last dimension (D) to get the intersection values, resulting in a [N, M] matrix
-    intersections = np.sum(minima, axis=2)
-
-    # Calculate normalized intersections as distances
-    sum1 = np.sum(hist1, axis=1)[:, np.newaxis]  # Shape [N, 1]
-    sum2 = np.sum(hist2, axis=1)[np.newaxis, :]  # Shape [1, M]
-    max_sum = np.minimum(sum1, sum2)  # Broadcasting to get max sum for each pair
 
     normalized_intersections = intersections / max_sum
     distance_matrix = 1 - normalized_intersections
@@ -240,21 +186,3 @@ def clustering(xyz, feats, n_clus, idx=None, iters=50, is_prob=False, tau=0.1):
                                        is_norm=True, is_xyz=True, is_prob=is_prob, tau=tau)
 
     return score, pi, cents, idx
-
-
-def get_spt_centers(points, ids):
-    uni_ids = np.unique(ids)
-    spnum = len(uni_ids)
-    superpoint_center = torch.zeros((spnum, points.size(-1))).to(points)
-    for spID in uni_ids:
-        spMask = np.where(ids == spID)[0]
-        try:
-            superpoint_center[spID] = points[spMask].mean(dim=0)
-        except IndexError:
-            print(spID, 'not found', uni_ids.max(), spnum)
-
-    return superpoint_center, uni_ids
-
-
-if __name__ == '__main__':
-    pts = torch.rand(3, 1024, 32)

@@ -233,14 +233,3 @@ def tokenize(texts: Union[str, List[str]], context_length: int = 77, truncate: b
     return result
 
 
-def load_clip_to_cpu(backbone_name):
-    url = _MODELS[backbone_name]
-    model_path = _download(url, os.path.expanduser("~/.cache/clip"))
-    try:
-        # loading JIT archive
-        model = torch.jit.load(model_path, map_location="cpu").eval()
-        state_dict = None
-    except RuntimeError:
-        state_dict = torch.load(model_path, map_location="cpu")
-    model = build_model(state_dict or model.state_dict())
-    return model

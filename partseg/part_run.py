@@ -8,8 +8,11 @@ import warnings
 import argparse
 from tqdm import tqdm
 from torch.utils.data import DataLoader
-import cv2
 import numpy as np
+try:
+    import cv2
+except Exception:
+    cv2 = None
 
 sys.path.append(os.path.abspath('../'))
 from shapenet import ShapeNetPart
@@ -17,7 +20,10 @@ from libs.lib_o3d import batch_geo_feature
 from partmodel.post_search import search_prompt, search_vweight
 from rendering.prejection import RealisticProjection
 from partseg.partclip import clip
-from libs.lib_vis import get_colored_image_pca_sep
+try:
+    from libs.lib_vis import get_colored_image_pca_sep
+except Exception:
+    get_colored_image_pca_sep = None
 
 warnings.filterwarnings("ignore")
 

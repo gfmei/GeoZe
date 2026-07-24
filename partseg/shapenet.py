@@ -1,6 +1,9 @@
 import os
 import glob
-import h5py
+try:
+    import h5py
+except Exception:
+    h5py = None
 import random
 import numpy as np
 from torch.utils.data import Dataset
@@ -105,9 +108,57 @@ def load_data_partseg(data_path, partition):
         return all_data1, all_label1, all_seg1
 
 
+_SYNSET2CAT = {
+    '02691156': 'airplane', '02773838': 'bag', '02954340': 'cap', '02958343': 'car',
+    '03001627': 'chair', '03261776': 'earphone', '03467517': 'guitar', '03624134': 'knife',
+    '03636649': 'lamp', '03642806': 'laptop', '03790512': 'motorbike', '03797390': 'mug',
+    '03948459': 'pistol', '04099429': 'rocket', '04225987': 'skateboard', '04379243': 'table',
+}
+_CAT2ID = {'airplane': 0, 'bag': 1, 'cap': 2, 'car': 3, 'chair': 4, 'earphone': 5, 'guitar': 6,
+           'knife': 7, 'lamp': 8, 'laptop': 9, 'motorbike': 10, 'mug': 11, 'pistol': 12,
+           'rocket': 13, 'skateboard': 14, 'table': 15}
+
+
+def load_data_partseg_local(data_path, partition, class_choice, num_points=2048, seed=0):
+    """Drop-in for load_data_partseg reading our shapenetcore_part_normal .txt files
+    (cols: x,y,z,nx,ny,nz,global_seg). Unit-sphere normalises each shape (centroid +
+    max-L2 scale) to match the HDF5 convention — critical because FPFH (radius 0.05) and
+    PartGeoZe (sigma_d) are scale-sensitive. Loads only `class_choice` for speed; labels
+    set so ShapeNetPart's own class filter is a no-op."""
+    import json
+    split = 'test' if partition not in ('train', 'val', 'trainval') else partition
+    split_file = os.path.join(data_path, 'train_test_split', f'shuffled_{split}_file_list.json')
+    entries = json.load(open(split_file))
+    id_choice = _CAT2ID[class_choice]
+    rng = np.random.RandomState(seed)
+    data, label, seg = [], [], []
+    for e in entries:                                       # "shape_data/<synset>/<id>"
+        synset = e.split('/')[1]
+        if _SYNSET2CAT.get(synset) != class_choice:
+            continue
+        txt = os.path.join(data_path, synset, e.split('/')[2] + '.txt')
+        if not os.path.exists(txt):
+            continue
+        d = np.loadtxt(txt).astype('float32')              # [M, 7]
+        pc, sg = d[:, :3], d[:, 6].astype('int64')
+        pc = pc - pc.mean(0)                               # unit-sphere normalise
+        sc = np.sqrt((pc ** 2).sum(1)).max()
+        if sc > 1e-6:
+            pc = pc / sc
+        m = pc.shape[0]
+        idx = rng.choice(m, num_points, replace=m < num_points)   # sample to num_points
+        data.append(pc[idx][None]); seg.append(sg[idx][None])
+        label.append(np.array([[id_choice]], dtype='int64'))
+    return (np.concatenate(data, 0), np.concatenate(label, 0), np.concatenate(seg, 0))
+
+
 class ShapeNetPart(Dataset):
     def __init__(self, data_path='semdata/', num_points=2048, partition='train', class_choice=None):
-        self.data, self.label, self.seg = load_data_partseg(data_path, partition)
+        if not os.path.exists(os.path.join(data_path, 'shapenet_part_seg_hdf5_data')):
+            self.data, self.label, self.seg = load_data_partseg_local(
+                data_path, partition, class_choice, num_points=num_points)
+        else:
+            self.data, self.label, self.seg = load_data_partseg(data_path, partition)
         self.cat2id = {'airplane': 0, 'bag': 1, 'cap': 2, 'car': 3, 'chair': 4,
                        'earphone': 5, 'guitar': 6, 'knife': 7, 'lamp': 8, 'laptop': 9,
                        'motorbike': 10, 'mug': 11, 'pistol': 12, 'rocket': 13, 'skateboard': 14, 'table': 15}

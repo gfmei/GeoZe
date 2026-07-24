@@ -8,33 +8,19 @@ import torch.nn.functional as F
 from torch import nn
 
 from libs.lib_clust import connect_clustering
-from libs.lib_vis import get_colored_point_cloud_from_soft_labels
+try:
+    from libs.lib_vis import get_colored_point_cloud_from_soft_labels
+except Exception:
+    get_colored_point_cloud_from_soft_labels = None
 from libs.mshift import balanced_mean_shift, np_mean_shift
 
 sys.path.append(os.path.abspath('../'))
 sys.path.append(os.path.abspath('../../'))
 sys.path.append(os.path.abspath('./'))
 
-from libs.lib_utils import (sinkhorn, index_points, down_sample, weighted_similarity, node_to_group, node_to_group_fpfh,
-                            sinkhorn_rpm,
-                            get_prototype, nn_assign)
+from libs.lib_utils import (sinkhorn, index_points, down_sample, node_to_group, node_to_group_fpfh,
+                            sinkhorn_rpm, get_prototype, nn_assign)
 from common.modules import GeoDecoder
-
-
-
-class GAttn(nn.Module):
-    def __init__(self, sigma, eps=0.01):
-        super().__init__()
-        self.sigma = sigma
-        self.eps = eps
-
-    def forward(self, node_gf_list, node_v_feats, weights_list, sigma_list):
-        attn_score = weighted_similarity(node_gf_list, node_gf_list, weights_list, sigma_list)
-        # attn_score = attn_score / attn_score.sum(dim=-1, keepdim=True)
-        attn_feats = torch.matmul(attn_score, node_v_feats) + node_v_feats
-        # attn_fpfhs = torch.matmul(attn_score, node_g_feats) + node_g_feats
-
-        return attn_feats
 
 
 class FPFHLAttn(nn.Module):
@@ -149,56 +135,6 @@ class S2PAttn(nn.Module):
             attn_fpfhs = torch.einsum('bmn,bnd->bmd', attention_scores, node_fpfhs) + xyz_fpfhs
 
         return attn_feats / 2.0, attn_fpfhs / 2.0
-
-
-class P2SAttn(nn.Module):
-    def __init__(self, sigma_e=0.1, top_k=20):
-        super().__init__()
-        self.top_k = top_k
-        self.sigma_e = sigma_e
-
-    def forward(self, node_xyz, xyz, node_feats, xyz_feats, node_fpfhs, xyz_fpfhs, geo='gf'):
-        if geo == 'dg':
-            d_dis = torch.cdist(node_xyz, xyz) / np.sqrt(node_xyz.size(-1))
-            g_dis = torch.cdist(node_fpfhs, xyz_fpfhs) / np.sqrt(node_fpfhs.size(-1))
-            # g_score = torch.softmax(g_score, dim=-1) * torch.softmax(g_score, dim=-2)
-            attention_scores = sinkhorn(g_dis + d_dis)[0]
-            attention_scores = attention_scores / attention_scores.sum(dim=-1, keepdim=True)
-        elif geo == 'df':
-            d_dis = torch.cdist(node_xyz, xyz)
-            d_score = sinkhorn(d_dis)[0]
-            f_score = torch.matmul(node_feats, xyz_feats.transpose(1, 2)) / np.sqrt(node_feats.size(-1))
-            # f_score = torch.exp(sinkhorn_rpm(f_score / self.sigma_e))
-            f_score = torch.softmax(f_score / self.sigma_e, dim=-1) * torch.softmax(f_score / self.sigma_e, dim=-2)
-            attention_scores = d_score * f_score
-            attention_scores = attention_scores / attention_scores.sum(dim=-1, keepdim=True)
-        else:
-            g_score = torch.matmul(node_fpfhs, xyz_fpfhs.transpose(1, 2)) / np.sqrt(node_fpfhs.size(-1))
-            g_score = torch.exp(sinkhorn_rpm(g_score))
-            f_score = torch.matmul(node_feats, xyz_feats.transpose(1, 2)) / np.sqrt(node_feats.size(-1))
-            f_score = torch.exp(sinkhorn_rpm(f_score))
-            attention_scores = g_score * f_score
-            attention_scores = attention_scores / attention_scores.sum(dim=-1, keepdim=True)
-        attn_feats = get_prototype(xyz_feats, attention_scores.transpose(-1, -2), self.top_k)[0] + node_feats
-        attn_fpfhs = get_prototype(xyz_fpfhs, attention_scores.transpose(-1, -2), self.top_k)[0] + node_fpfhs
-        attn_protos = get_prototype(xyz, attention_scores.transpose(-1, -2), self.top_k)[0] + node_xyz
-
-        return attn_feats / 2.0, attn_fpfhs / 2.0, attn_protos / 2.0
-
-
-class LAttn(nn.Module):
-    def __init__(self, sigma, eps=0.01):
-        super().__init__()
-        self.sigma = sigma
-        self.eps = eps
-
-    def forward(self, node_gf_list, node_v_feats, weights_list, sigma_list):
-        attn_score = weighted_similarity(node_gf_list, node_gf_list, weights_list, sigma_list)
-        # attn_score = attn_score / attn_score.sum(dim=-1, keepdim=True)
-        attn_feats = torch.matmul(attn_score, node_v_feats) + node_v_feats
-        # attn_fpfhs = torch.matmul(attn_score, node_g_feats) + node_g_feats
-
-        return attn_feats / 2.0
 
 
 def g2lfusion(node_feats, feats, gamma):

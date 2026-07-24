@@ -1,10 +1,9 @@
 import json
-import clip
 import torch
 import numpy as np
 import os.path as osp
 
-from libs.lib_utils import index_points, down_sample
+from libs.lib_utils import index_points
 from partseg.partmodel.best_param import *
 
 from partseg.partmodel.partgeoze import PartGeoZe

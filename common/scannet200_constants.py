@@ -295,35 +295,3 @@ VALID_PANOPTIC_IDS = (1, 3)
 CLASS_LABELS_PANOPTIC = ('wall', 'floor')
 
 
-def hash_color(index, max_value=255):
-    """
-    Generate a color based on a hash of the index.
-    This function aims to produce a wide variety of colors by hashing the index.
-    Parameters:
-    - index: int, the index to hash.
-    - max_value: int, the maximum value for a color channel.
-    Returns:
-    - tuple, representing an RGB color.
-    """
-    # Simple hash function to vary colors
-    hash_val = hash(f"color{index}") % (max_value**3)
-    # Decompose the hash into RGB components
-    r = (hash_val // (max_value**2)) % max_value
-    g = (hash_val // max_value) % max_value
-    b = hash_val % max_value
-    return (r, g, b)
-
-def generate_hashed_color_map(max_index=2000):
-    """
-    Generate a color map using a hash function to ensure a variety of colors.
-    Parameters:
-    - max_index: int, the maximum index for the color map.
-    Returns:
-    - dict, the generated color map.
-    """
-    color_map = {index: hash_color(index) for index in range(max_index + 1)}
-    return color_map
-
-# Example usage
-SCANNET_COLOR_MAP_2000 = generate_hashed_color_map(2000)
-

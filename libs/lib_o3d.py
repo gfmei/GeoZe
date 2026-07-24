@@ -3,17 +3,6 @@ import numpy as np
 import torch
 
 
-def normal_redirect(points, normals, view_point):
-    '''
-    Make direction of normals towards the view point
-    '''
-    vec_dot = np.sum((view_point - points) * normals, axis=-1)
-    mask = (vec_dot < 0.)
-    redirected_normals = normals.copy()
-    redirected_normals[mask] *= -1.0
-    return redirected_normals
-
-
 def to_o3d_pcd(pcd, normal=None, radius=-1.0):
     if torch.is_tensor(pcd):
         pcd = pcd.cpu().numpy()
@@ -26,15 +15,6 @@ def to_o3d_pcd(pcd, normal=None, radius=-1.0):
     if normal is not None:
         pcd_.normals = o3d.utility.Vector3dVector(normal)
     return pcd_
-
-
-def estimate_normals(points, radius=0.05, k=33):
-    pcd = to_o3d_pcd(points)
-    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=radius, max_nn=k))
-    point_normals = np.asarray(pcd.normals)
-    # view_point = points.mean(axis=0)
-    # point_normals = normal_redirect(points, point_normals, view_point)
-    return point_normals
 
 
 def estimate_geo_feature(points, normals=None, voxel_size=0.05):

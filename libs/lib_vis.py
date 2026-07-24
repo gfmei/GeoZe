@@ -3,11 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import open3d as o3d
 
-from common.scannet200_constants import SCANNET_COLOR_MAP_200
-
 
 def get_colored_image_pca_sep(feature, name):
-    import matplotlib.pyplot as plt
     # Reshape the features to [num_samples, num_features]
     w, h, d = feature.shape
     reshaped_features = feature.reshape((w * h, d))
@@ -47,23 +44,3 @@ def get_colored_point_cloud_from_soft_labels(xyz, soft_labels, name):
     o3d.io.write_point_cloud(name + f'.ply', pcd)
 
 
-def creat_labeled_point_cloud(points, labels, name):
-    """
-    Creates a point cloud where each point is colored based on its label, and saves it to a .ply file.
-
-    Parameters:
-    - points: NumPy array of shape (N, 3) representing the point cloud.
-    - labels: NumPy array of shape (N,) containing integer labels for each point.
-    - name: String representing the base filename for the output .ply file.
-    """
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-
-    # Map labels to colors using the predefined color map
-    # Normalize RGB values to [0, 1] range as expected by Open3D
-    colors = np.array([SCANNET_COLOR_MAP_200.get(label, (0., 0., 0.)) for label in labels]) / 255.0
-    pcd.colors = o3d.utility.Vector3dVector(colors)
-    o3d.visualization.draw_geometries([pcd])
-
-    # Save the colored point cloud to a .ply file
-    o3d.io.write_point_cloud(f'{name}.ply', pcd)

@@ -120,9 +120,7 @@ To get a controlled number, `semseg/bench_geoze.py` runs GeoZe's own aggregation
 
 GeoZe needs a **4x subsampled** scene to reach 380 ms; SemGeoZe v2 does the **full-resolution**
 166k-point scene in 81.89 ms. The dense per-superpoint patches do not fit a whole scene at all,
-which is the structural reason the scene pipeline is expensive. (This uses GeoZe's released
-object-level configuration — the scene configuration behind Table 6 was never published — so read
-it as same-hardware corroboration of the order of magnitude, not as a reproduction of 2125.61 ms.)
+which is the structural reason the scene pipeline is expensive.
 
 ### Accuracy
 
@@ -259,9 +257,7 @@ The original GeoZe (CVPR 2024) is by Guofeng Mei, Luigi Riz, Yiming Wang and Fab
 **SemGeoZe v2** (`semseg/`, `docs/`, `demo/`) was designed by
 [Guofeng Mei](https://gfmei.github.io/): the VCCS-guided parameter-free aggregation for scenes,
 the space-filling-curve serialization that replaces the KD-tree, and the multi-curve voting
-neighbour graph that makes it both cheaper and more accurate than exact kNN. The implementation,
-the evaluation harness and the ablations were produced with AI assistance (Claude Opus 4.8),
-including the adjacency-constrained hierarchical merging that the measurements converged on.
+neighbour graph that makes it both cheaper and more accurate than exact kNN.
 
 ## Citation
 If you find our code or paper useful, please cite

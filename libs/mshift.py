@@ -1,44 +1,9 @@
-import copy
-
 import torch
 import torch.nn.functional as F
 import numpy as np
-from sklearn.cluster import MeanShift, estimate_bandwidth, DBSCAN
+from sklearn.cluster import DBSCAN
 
 from libs.lib_clust import gmm_params
-from libs.lib_utils import sinkhorn
-
-
-def normalize_matrix(matrix, axis=1, norm='l2'):
-    """
-    Normalize a NumPy matrix along a specified axis.
-
-    Parameters:
-    - matrix: A NumPy array to be normalized.
-    - axis: The axis along which normalization is performed. Default is 1.
-    - norm: The type of norm to use for normalization. Supports 'l1' and 'l2'. Default is 'l2'.
-
-    Returns:
-    - A normalized NumPy array.
-    """
-    if norm == 'l2':
-        # Compute the L2 norm of each row (axis=1) or column (axis=0)
-        l2_norm = np.linalg.norm(matrix, axis=axis, keepdims=True)
-        # Avoid division by zero
-        l2_norm[l2_norm == 0] = 1
-        # Normalize the matrix
-        normalized_matrix = matrix / l2_norm
-    elif norm == 'l1':
-        # Compute the L1 norm of each row (axis=1) or column (axis=0)
-        l1_norm = np.sum(np.abs(matrix), axis=axis, keepdims=True)
-        # Avoid division by zero
-        l1_norm[l1_norm == 0] = 1
-        # Normalize the matrix
-        normalized_matrix = matrix / l1_norm
-    else:
-        raise ValueError("Unsupported norm. Use 'l1' or 'l2'.")
-
-    return normalized_matrix
 
 
 def similarity(src, tgt):
@@ -46,20 +11,6 @@ def similarity(src, tgt):
     tgt_norm = F.normalize(tgt, dim=-1)
     scores = torch.matmul(src_norm, tgt_norm.transpose(1, 2))
     return scores
-
-
-def one_step_mean_shift(feats, centroids, mu, nu=None, tau=1.0, eps=0.5):
-    scores = similarity(feats, centroids)
-    cost = 1 - copy.deepcopy(scores)
-    gamma = sinkhorn(cost / tau, p=mu, q=nu)[0]
-    mask = (scores >= eps).to(scores)
-    gamma = gamma * mask
-    gamma = gamma / torch.sum(gamma, dim=-1, keepdim=True).clip(min=1e-3)
-    pi, delta = gmm_params(gamma, feats)
-    # selected_ids = torch.argmax(similarity(delta, feats), dim=-1).unsqueeze(-1).expand_as(delta)
-    # centroids = torch.gather(feats, dim=1, index=selected_ids)
-    centroids = (delta + centroids) / 2
-    return pi, centroids, gamma
 
 
 def balanced_mean_shift(v_feats, g_feats, n_clus, tau, eps=1.0, iters=10, alpha=1):
@@ -105,7 +56,5 @@ def np_mean_shift(v_feats, g_feats, is_mean=False):
     g_centers = torch.stack(g_centers)
 
     return v_centers, g_centers, n_clusters_
-
-
 
 

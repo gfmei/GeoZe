@@ -3,7 +3,6 @@ import copy
 import numpy as np
 import torch
 from torch import nn
-from transformers.models.esm.openfold_utils import feats
 
 
 def angle_difference(src_feats, dst_feats):
@@ -112,37 +111,6 @@ def angle(v1: torch.Tensor, v2: torch.Tensor):
     angles = torch.acos(dot_products)
 
     return angles
-
-
-def normal_redirect(points, normals, view_point):
-    '''
-    Make direction of normals towards the view point
-    '''
-    vec_dot = np.sum((view_point - points) * normals, axis=-1)
-    mask = (vec_dot < 0.)
-    redirected_normals = normals.copy()
-    redirected_normals[mask] *= -1.
-    return redirected_normals
-
-
-def calculate_curvature_pca(points, neighbors, eps=1e-8):
-    """
-    :param points: B, N, C
-    :param neighbors: N, N, S, C
-    :param eps:
-    :return:
-    """
-    # Calculate covariance matrices
-    num_neighbors = neighbors.shape[-2]
-    centered_neighbor_points = neighbors - points.unsqueeze(-2)
-    cov_matrices = torch.matmul(centered_neighbor_points.transpose(-2, -1), centered_neighbor_points) / num_neighbors
-
-    # Calculate eigenvalues and curvatures
-    eigenvalues = torch.linalg.eigvalsh(cov_matrices)
-    max_eigenvalues = eigenvalues.max(dim=-1)[0]
-    curvatures = 2 * max_eigenvalues / (eigenvalues.sum(dim=-1) + eps)
-
-    return curvatures
 
 
 def index_gather(points, idx):
@@ -354,15 +322,6 @@ def sinkhorn_rpm(log_alpha, n_iters: int = 5, slack: bool = True, eps: float = -
     return log_alpha
 
 
-def weighted_similarity(src_list, tgt_list, weights_list, sigma_list):
-    sim_list = [weight * sinkhorn(torch.cdist(src, tgt) / sigma)[1]
-                for src, tgt, weight, sigma in zip(src_list, tgt_list, weights_list, sigma_list)]
-    scores = torch.exp(torch.stack(sim_list, dim=0).mean(dim=0))
-    scores = scores / scores.sum(dim=-1, keepdim=True).clip(min=1e-4)
-
-    return scores
-
-
 def knn_query_group(nsample, xyz, new_xyz):
     """
     Input:
@@ -389,44 +348,6 @@ def knn_query_group(nsample, xyz, new_xyz):
     group_idx = idx.clone()[:, :, :nsample]
 
     return group_idx.clip(min=0, max=N)
-
-
-def node_to_group(node, xyz, feats, radius, n_sample, os=None, is_knn=True):
-    """
-    Input:
-        os: [B, N]
-        radius: ball radius
-        n_sample:
-        xyz: input feats position semdata, [B, N, 3]
-        feats: input feats semdata, [B, N, D]
-    Return:
-        new_xyz: sampled feats position semdata, [B, n_point, n_sample, 3]
-        new_points: sampled feats semdata, [B, n_point, n_sample, D]
-    """
-    if os is None:
-        xyz_center = torch.mean(xyz, dim=1, keepdim=True)
-        feats_center = torch.mean(feats, dim=1, keepdim=True)
-        os = torch.ones((xyz.shape[0], xyz.shape[1])).to(xyz) / xyz.shape[1]
-    else:
-        if len(os.shape) == 1:
-            os = os.unsqueeze(0)
-        xyz_center = torch.einsum('bnd,bn->bd', xyz, os)
-        pi = torch.sum(os, dim=-1, keepdim=True).clip(min=1e-4)
-        xyz_center = (xyz_center / pi).unsqueeze(1)
-        feats_center = torch.einsum('bnd,bn->bd', feats, os)
-        feats_center = (feats_center / pi).unsqueeze(1)
-    if is_knn:
-        idx = knn_query_group(n_sample, xyz, node)
-    else:
-        idx = query_ball_point(radius, n_sample, xyz, node)  # [B, K, n_sampling]
-    cat_xyz = torch.cat([xyz, xyz_center], dim=1)
-    grouped_xyz = index_gather(cat_xyz, idx)  # [B, n_point, n_sample, 3]
-    cat_feats = torch.cat([feats, feats_center], dim=1)
-    grouped_feats = index_gather(cat_feats, idx)  # [B, n_point, n_sample, C]
-    cat_os = torch.cat([os, torch.zeros_like(os[:, :1])], dim=-1).unsqueeze(-1)
-    grouped_os = index_gather(cat_os, idx)
-    return grouped_xyz, grouped_feats, grouped_os.squeeze(-1), idx
-
 
 
 def node_to_group(node, xyz, feats, radius, n_sample, os=None, is_knn=True):
@@ -526,7 +447,6 @@ def get_prototype(features, similarity, top_k=20):
     return protos, prob / prob.mean(dim=-1, keepdim=True).clip(min=1e-4)
 
 
-
 def nn_assign(down_xyz, xyz, patch_xyz, patch_feats):
     idx = knn_query_group(1, down_xyz, xyz)  # [B, N, 1]
     B, S, K, D = patch_feats.size()
@@ -536,5 +456,3 @@ def nn_assign(down_xyz, xyz, patch_xyz, patch_feats):
     nn_dis = torch.cdist(xyz.unsqueeze(-2), nn_patch_xyz)
     ids = torch.topk(nn_dis, k=1, dim=-1, largest=False)[1]  # [B, N, 1]
     return torch.gather(nn_patch_feats, index=ids.expand(B, -1, -1, D), dim=-2).squeeze(-2)
-
-

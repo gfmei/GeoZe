@@ -2,7 +2,7 @@
 import torch
 from torch import nn
 
-from libs.lib_utils import index_points, angle
+from libs.lib_utils import index_points
 
 
 class GeoDecoder(nn.Module):
