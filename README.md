@@ -11,19 +11,22 @@ Technologies of Vision (TeV), Foundation Bruno Kessler &nbsp; &nbsp;
 {gmei, luriz, ywang, poiesi}@fbk.eu
 
 **CVPR 2024**
-[Project Page](https://luigiriz.github.io/geoze-website/) | [Arxiv Paper](https://arxiv.org/abs/2312.02244)
+[Project Page](https://luigiriz.github.io/geoze-website/) | [Arxiv Paper](https://arxiv.org/abs/2312.02244) | [**Live Demo**](https://gfmei.github.io/GeoZe/)
 
 ## Demos
 
 Two ways to see the method run, both documented end to end.
 
-**Interactive scan viewer** — [`docs/`](docs/README.md) · GitHub Pages, static, nothing to keep alive.
+**[Interactive scan viewer &rarr; gfmei.github.io/GeoZe](https://gfmei.github.io/GeoZe/)**
+&nbsp;·&nbsp; source in [`docs/`](docs/README.md)
+
 Orbit a real ScanNet scan and switch between the raw scan, the ground truth, per-point VLM
 predictions, region mean pooling, SemGeoZe v2, the merged partition itself, and an error map. Each
-scene shows its own mIoU for all three methods.
+scene shows its own mIoU for all three methods, and the three bundled scenes span the neutral,
+typical and good bands of the per-scene result — so the deltas you see are signed both ways.
 
 ```bash
-python -m http.server 8000 --directory docs      # preview locally, then Settings -> Pages -> /docs
+python -m http.server 8000 --directory docs      # preview locally before pushing
 python semseg/export_demo.py --candidates 40     # regenerate the bundled scenes
 ```
 

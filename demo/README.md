@@ -14,6 +14,8 @@ license: mit
 
 Interactive demo for the scene-level extension of
 [GeoZe (CVPR 2024)](https://arxiv.org/abs/2312.02244).
+A static, precomputed viewer is also live at
+[gfmei.github.io/GeoZe](https://gfmei.github.io/GeoZe/).
 
 The 2D→3D feature fusion is precomputed and baked into `data/*.npz`; what runs on each request is
 the **training-free geometric aggregation itself** — 82 ms/scene on an A100, a couple of seconds

@@ -1,5 +1,7 @@
 # Interactive scan viewer (GitHub Pages)
 
+**Live at [gfmei.github.io/GeoZe](https://gfmei.github.io/GeoZe/)**
+
 A self-contained WebGL viewer for SemGeoZe v2 results — no server, no GPU, no dependencies, nothing
 to keep alive. Everything is precomputed, so it keeps working long after any Space goes to sleep.
 
