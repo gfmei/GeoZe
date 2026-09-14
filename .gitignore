@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 semseg/out/
+partseg/out/
 partseg/output/
 logs/
 .idea/

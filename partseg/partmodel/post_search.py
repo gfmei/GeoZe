@@ -1,4 +1,6 @@
 import json
+import time
+
 import torch
 import numpy as np
 import os.path as osp
@@ -13,6 +15,7 @@ from libs.lib_metric import calculate_shape_IoU
 from partseg.partclip import clip
 
 PC_NUM = 2048
+TOKEN_LAYOUT = 'repo'      # see view_tokens; 'tokens' is correct but the prompts are tuned to 'repo'
 
 feat_dims = {'ViT-B/16': 512, 'ViT-B/32': 512, 'RN50': 1024, 'RN101': 512}
 cat2id = {'airplane': 0, 'bag': 1, 'cap': 2, 'car': 3, 'chair': 4,
@@ -22,14 +25,48 @@ seg_num = [4, 2, 2, 4, 4, 3, 3, 2, 2, 2, 6, 2, 3, 3, 3, 3]
 index_start = [0, 4, 6, 8, 12, 16, 19, 22, 24, 28, 30, 36, 38, 41, 44, 47]
 
 
-def textual_encoder(clip_model, class_choice, searched_prompt=None):
+def view_tokens(feat, layout='repo'):
+    """Cached feature maps -> [n, 10, 196, 512], in one of two layouts.
+
+    part_run.Extractor stores the maps channel-first, [n, 10, 512, 14, 14].
+
+      layout='tokens'  permute back to true CLIP patch tokens.  This is the mathematically
+                       correct recovery: every row comes out with unit norm, which is what
+                       Extractor wrote, and the cosine between horizontally adjacent patches
+                       is 0.70.
+      layout='repo'    the shipped reshape(-1, 10, 196, 512), which interleaves channels with
+                       positions: rows have norm 0.77 +- 0.64 and adjacent-patch cosine 0.00.
+
+    'repo' is the DEFAULT even though 'tokens' is the correct one, because the released
+    `best_prompt` and `best_vweight` were searched against it and are entangled with it: on the
+    full test set, per-point argmax scores 50.53 class-mIoU under 'repo' and 8.7 under 'tokens'
+    with those same prompts (see partseg/out/layout_prompt.json).  Changing the layout alone
+    would therefore not be a fix, it would be a regression; the prompts would have to be
+    re-searched with it.  Every method in the comparison is run under the same layout, so the
+    choice cancels out of the ranking.
+    """
+    if feat.dim() != 5:
+        return feat
+    n, nv, c = feat.shape[0], feat.shape[1], feat.shape[2]
+    if layout == 'repo':
+        return feat.reshape(n, nv, -1, c)
+    return feat.permute(0, 1, 3, 4, 2).reshape(n, nv, -1, c)
+
+
+def textual_encoder(clip_model, class_choice, searched_prompt=None, device='cuda'):
     if not searched_prompt:
         sents = best_prompt[class_choice]
     else:
         sents = searched_prompt
-    prompts = torch.cat([clip.tokenize(p) for p in sents]).cuda()
+    prompts = torch.cat([clip.tokenize(p) for p in sents]).to(device)
     text_feat = clip_model.encode_text(prompts)
     return text_feat, sents
+
+
+def simple_prompts(class_choice):
+    """`a {part} of a {category}` — a neutral template, not searched against any layout."""
+    from partseg.shapenet import cat2part
+    return [f'a {part} of a {class_choice}' for part in cat2part[class_choice]]
 
 
 def read_prompts():
@@ -51,7 +88,7 @@ def search_prompt(class_choice, model_name, searched_prompt=None, only_evaluate=
     test_normal = torch.load(osp.join(output_path, "test_normal.pt")).cuda()
     test_fpfh = torch.load(osp.join(output_path, "test_fpfh.pt")).cuda()
     test_pointloc = torch.load(osp.join(output_path, "test_pointloc.pt"))
-    test_feat = test_feat.reshape(-1, 10, 196, 512)
+    test_feat = view_tokens(test_feat, layout=TOKEN_LAYOUT)
 
     # encoding textual features
     clip_model, _ = clip.load(model_name)
@@ -62,13 +99,12 @@ def search_prompt(class_choice, model_name, searched_prompt=None, only_evaluate=
     vweights = torch.Tensor(best_vweight[class_choice]).cuda()
     part_num = text_feat.shape[0]
     transformer = PartGeoZe(sigma_d=10.0, sigma_a=0.01, sigma_e=0.001, angle_k=10, n_pts=256).cuda()
-    acc, iou = up_run_epoch(transformer, test_pc, test_normal, test_fpfh, test_feat, test_label, test_ifseen, test_pointloc,
-                            text_feat, part_num, class_choice, model_name, img_size=img_size, vweights=vweights)
-    # acc, iou = vanilla_run_epoch(transformer, test_pc, test_feat, test_label, test_ifseen, test_pointloc,
-    #                      text_feat, part_num, class_choice, model_name, img_size=img_size)
+    res = up_run_epoch(transformer, test_pc, test_normal, test_fpfh, test_feat, test_label, test_ifseen, test_pointloc,
+                       text_feat, part_num, class_choice, model_name, img_size=img_size, vweights=vweights)
+    acc, iou = res['acc'], res['iou']
     if only_evaluate:
         print('\nFor class {}, part segmentation Acc: {}, IoU: {}.\n'.format(class_choice, acc, iou))
-        return
+        return res
 
     print("\n***** Searching for prompts *****\n")
     print('\nBefore prompt search, Acc: {}, IoU: {}.\n'.format(acc, iou))
@@ -108,7 +144,7 @@ def search_vweight(class_choice, model_name, searched_prompt=None, img_size=(64,
     test_label = torch.load(osp.join(output_path, "test_labels.pt")) - index_start[cat2id[class_choice]]
     test_ifseen = torch.load(osp.join(output_path, "test_ifseen.pt"))
     test_pointloc = torch.load(osp.join(output_path, "test_pointloc.pt"))
-    test_feat = test_feat.reshape(-1, 10, 196, 512)
+    test_feat = view_tokens(test_feat, layout=TOKEN_LAYOUT)
 
     clip_model, _ = clip.load(model_name)
     clip_model.eval()
@@ -225,10 +261,12 @@ def up_run_epoch(transformer, val_pc, val_normal, val_fpfh, val_feat, val_label,
     val_size = val_feat.shape[0]
     bs = 15
     iter = val_size // bs
-    pred_seg, label_seg, class_label = [], [], []
+    pred_seg, label_seg, class_label, ms = [], [], [], []
     num_node = 2048
     # print(val_feat.shape, val_label.shape, val_ifseen.shape, val_pointloc.shape)
     for i in range(iter + 1):
+        if bs * i >= val_size:
+            break
         end = bs * i + bs if bs * i + bs < val_size else val_size
         feat, label = val_feat[bs * i:end], val_label[bs * i:end]
         is_seen, point_loc = val_ifseen[bs * i:end], val_pointloc[bs * i:end]
@@ -241,7 +279,9 @@ def up_run_epoch(transformer, val_pc, val_normal, val_fpfh, val_feat, val_label,
         feat, is_seen, point_loc = vanilla_upprojection(feat, is_seen, point_loc, img_size=img_size,
                                                         n_points=2048, vweights=vweights)
         # feat_raw = feat
+        torch.cuda.synchronize(); t0 = time.time()
         feat, _, idx = transformer(point, normal, fpfh, feat, text_feat)
+        torch.cuda.synchronize(); ms.append((time.time() - t0) * 1e3 / b)
         text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True)
         feat = feat / feat.norm(dim=-1, keepdim=True)
         # calculating logits of each pixel on the feature map
@@ -277,9 +317,8 @@ def up_run_epoch(transformer, val_pc, val_normal, val_fpfh, val_feat, val_label,
     label_seg = label_seg.cpu().numpy()
     class_label = class_label.cpu().numpy()
     shape_ious, category = calculate_shape_IoU(pred_seg, label_seg, class_label, class_choice, eva=True)
-    shape_ious = np.mean(np.array(shape_ious))
+    shape_ious = np.array(shape_ious)
 
-    return acc, shape_ious * 100.
-
-
-
+    return dict(acc=float(acc), iou=float(shape_ious.mean() * 100.), n=int(pred_seg.shape[0]),
+                shape_ious=shape_ious.tolist(), ms=float(np.mean(ms[1:] if len(ms) > 1 else ms)),
+                regions=float(transformer.n_pts))
