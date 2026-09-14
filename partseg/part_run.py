@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -17,6 +18,9 @@ except Exception:
 sys.path.append(os.path.abspath('../'))
 from shapenet import ShapeNetPart
 from libs.lib_o3d import batch_geo_feature
+from partmodel.best_param import best_param_v2
+from partmodel.eval_v2 import evaluate, summarize
+from partmodel import post_search
 from partmodel.post_search import search_prompt, search_vweight
 from rendering.prejection import RealisticProjection
 from partseg.partclip import clip
@@ -83,13 +87,6 @@ class Extractor(torch.nn.Module):
 
 
 def extract_feature_maps(model_name, data_path, class_choice, device):
-    model, _ = clip.load(model_name, device=device)
-    model.to(device)
-
-    segmentor = Extractor(model)
-    segmentor = segmentor.to(device)
-    segmentor.eval()
-
     output_path = 'output/{}/'.format(model_name.replace('/', '_'))
     mode = 'test'
 
@@ -98,6 +95,13 @@ def extract_feature_maps(model_name, data_path, class_choice, device):
         os.makedirs(save_path)
     if os.path.exists(os.path.join(save_path, "{}_features.pt".format(mode))):
         return
+
+    model, _ = clip.load(model_name, device=device)
+    model.to(device)
+
+    segmentor = Extractor(model)
+    segmentor = segmentor.to(device)
+    segmentor.eval()
 
     print('\nStart to extract and save feature maps of class {}...'.format(class_choice))
     test_loader = DataLoader(ShapeNetPart(data_path, partition=mode, num_points=PC_NUM, class_choice=class_choice),
@@ -138,50 +142,95 @@ def extract_feature_maps(model_name, data_path, class_choice, device):
     torch.save(pointloc_store, os.path.join(save_path, "{}_pointloc.pt".format(mode)))
 
 
-def main(args, total=False):
+V2_KEYS = ('part', 'n_sp', 'knn', 'w_x', 'w_n', 'w_g', 'w_v', 'min_size', 'th_f', 'th_n',
+           'rounds', 'alpha', 'gamma0', 'n_ev', 'embed', 'n_land', 'refine', 'land', 'seed',
+           'sparse_iters')
+
+
+def main(args):
+    """Evaluate one category, a comma-separated list, or `all` (16 categories, PointCLIP V2 protocol).
+
+    --model geoze              the original GeoZe aggregation (partmodel/partgeoze.py)
+    --model v2                 PartGeoZe v2   (partmodel/partgeozev2.py)
+    --baseline point|meanpool  no aggregation / mean pooling over the v2 superpoints
+    --baseline oracle          majority ground-truth part per superpoint: the partition's ceiling
+    """
     random.seed(0)
-    device = args.device
-    model_name = args.modelname
+    torch.manual_seed(0)
+    post_search.TOKEN_LAYOUT = args.layout      # the GeoZe path reads the module-level setting
+    classes = list(cat2id) if args.classchoice == 'all' else args.classchoice.split(',')
+    img_size = (params[net]['resolution'], params[net]['resolution'])
 
-    data_path = args.datasetpath
-    only_evaluate = args.onlyevaluate
-    if not total:
-        class_choice = args.classchoice
-        # extract and save feature maps, labels, point locations
-        extract_feature_maps(model_name, data_path, class_choice, device)
+    p = dict(best_param_v2)
+    for k in V2_KEYS:
+        if getattr(args, k, None) is not None:
+            p[k] = getattr(args, k)
+    p['center'] = not args.no_center
+    p['split'] = not args.no_split
+    p['self_tune'] = not args.no_self_tune
+    p['ortho'] = args.ortho
+    mode = args.baseline or args.model
+    tag = args.tag or (mode if mode != 'v2' else 'v2' + ('/' + p['part'] if p['part'] != 'spectral' else ''))
+    tag += ('' if args.layout == 'repo' else '/tokens') + ('' if args.prompt == 'repo' else '/simple')
 
-        start_time = time.time()
-        # test or post search prompt and view weights
-        prompts = search_prompt(class_choice, model_name, only_evaluate=only_evaluate,
-                                img_size=(params[net]['resolution'], params[net]['resolution']))
-        end_time = time.time()
-        inference_time = end_time - start_time
-        print(f"Inference time: {inference_time * 1000:.2f} ms")
-        if not only_evaluate:
-            search_vweight(class_choice, model_name, prompts)
-    else:
-        classes = cat2id.keys()
-        for class_choice in classes:
-            # class_choice = args.classchoice
-            # extract and save feature maps, labels, point locations
-            extract_feature_maps(model_name, data_path, class_choice, device)
-            start_time = time.time()
-            # test or post search prompt and view weights
-            prompts = search_prompt(class_choice, model_name, only_evaluate=only_evaluate,
-                                    img_size=(params[net]['resolution'], params[net]['resolution']))
-            end_time = time.time()
-            inference_time = end_time - start_time
-            print(f"Inference time: {inference_time * 1000:.2f} ms")
-            if not only_evaluate:
-                search_vweight(class_choice, model_name, prompts)
+    results, t0 = {}, time.time()
+    for class_choice in classes:
+        # extract and save feature maps, labels, point locations (no-op when cached)
+        extract_feature_maps(args.modelname, args.datasetpath, class_choice, args.device)
+        if mode == 'geoze':
+            r = search_prompt(class_choice, args.modelname, only_evaluate=not args.search, img_size=img_size)
+            if args.search:                          # prompt search, then view-weight search
+                search_vweight(class_choice, args.modelname, r)
+                continue
+        else:
+            r = evaluate(class_choice, args.modelname, mode, p, device=args.device, img_size=img_size,
+                         limit=args.limit, layout=args.layout, prompt=args.prompt)
+        results[class_choice] = r
+        print(f"  {class_choice:12s} n={r['n']:4d}  Acc {r['acc']:6.2f}  IoU {r['iou']:6.2f}  "
+              f"{r['ms']:7.2f} ms/shape  {r['regions']:5.1f} regions", flush=True)
+
+    if not results:
+        return
+    sm = summarize(results)
+    print(f"\nRESULT shapenetpart/{tag}  class-mIoU={sm['class_miou']:.2f}  "
+          f"instance-mIoU={sm['instance_miou']:.2f}  Acc={sm['acc']:.2f}  "
+          f"{sm['ms']:.2f} ms/shape  ({len(results)} classes, {time.time() - t0:.0f}s)", flush=True)
+    if args.out:
+        os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
+        json.dump({'tag': tag, 'summary': sm, 'param': p if mode != 'geoze' else None, 'args': vars(args),
+                   'classes': {c: {k: v for k, v in r.items() if k != 'shape_ious'} for c, r in results.items()},
+                   'shape_ious': {c: r['shape_ious'] for c, r in results.items()}},
+                  open(args.out, 'w'), indent=1)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--modelname', default='ViT-B/16')
-    parser.add_argument('--classchoice', default='table')
+    parser.add_argument('--classchoice', default='table', help='a category, a comma list, or all')
     parser.add_argument('--datasetpath', default='/data/disk1/data')
-    parser.add_argument('--onlyevaluate', default=True)
     parser.add_argument('--device', type=str, default='cuda:0')
-    args = parser.parse_args()
-    main(args, False)
+    parser.add_argument('--model', default='v2', choices=['geoze', 'v2'])
+    parser.add_argument('--baseline', default='', choices=['', 'point', 'meanpool', 'oracle'])
+    parser.add_argument('--search', action='store_true', help='GeoZe only: prompt + view-weight search')
+    parser.add_argument('--no_center', action='store_true', help='v2: merge on raw instead of centred cosines')
+    parser.add_argument('--no_split', action='store_true', help='v2: keep spectral clusters as they are')
+    parser.add_argument('--limit', type=int, default=0, help='shapes per class (0 = all)')
+    parser.add_argument('--layout', default='repo', choices=['repo', 'tokens'],
+                        help="cached feature-map layout: the shipped reshape, or true CLIP patch tokens")
+    parser.add_argument('--prompt', default='repo', choices=['repo', 'simple'],
+                        help='the searched per-part sentences, or `a {part} of a {category}`')
+    parser.add_argument('--tag', default='')
+    parser.add_argument('--out', default='', help='json with per-class and per-shape results')
+    parser.add_argument('--part', default=None, choices=[None, 'spectral', 'kmeans', 'fps'])
+    parser.add_argument('--embed', default=None,
+                        choices=[None, 'sparse', 'dense', 'nystrom', 'lobpcg'])
+    parser.add_argument('--no_self_tune', action='store_true', help='drop local scaling of the position cue')
+    parser.add_argument('--ortho', action='store_true', help='Nystrom: orthogonalised extension')
+    parser.add_argument('--land', default=None, choices=[None, 'curve', 'fps'])
+    parser.add_argument('--seed', default=None, choices=[None, 'curve', 'fps'])
+    for k in ('th_f', 'th_n', 'alpha', 'gamma0', 'w_x', 'w_n', 'w_g', 'w_v'):
+        parser.add_argument(f'--{k}', type=float, default=None)
+    for k in ('n_sp', 'knn', 'rounds', 'min_size', 'n_ev', 'n_land', 'refine',
+              'sparse_iters'):
+        parser.add_argument(f'--{k}', type=int, default=None)
+    main(parser.parse_args())
