@@ -81,7 +81,8 @@ best_vweight = {
 # command line (`python part_run.py --model v2 --th_f 0.6`); see probe_partition.py for the
 # measurements behind the partition choice and the merge thresholds.
 best_param_v2 = dict(
-    part='kmeans',         # superpoints: kmeans | spectral | fps   (partmodel/spectral.py).
+    part='kmeans',         # superpoints: kmeans | spectral | vccs_gpu | vccs | fps
+                           # (partmodel/spectral.py).
                            # MEASURED default.  Oracle IoU at 64 regions, mean over 7 categories:
                            #   fps 80.54 @ 0.65 ms | kmeans 82.86 @ 1.93 | kmeans+refine 83.00 @
                            #   2.19 | Nystrom-ortho 82.90 @ 10.57 | dense spectral 84.20 @ 37.31.
@@ -110,6 +111,15 @@ best_param_v2 = dict(
                            # 'nystrom' landmark extension; needs 256 landmarks and 10.6 ms just
                            #           to tie plain k-means, so it is kept only for reference.
                            # 'lobpcg'  189 ms/shape -- slower than the full decomposition.
+    vccs_voxel=0.05,       # VCCS voxel size.  Must be >= the point spacing (~0.05 at 2048
+                           # points on a unit-sphere shape) or the 26-connectivity adjacency
+                           # falls apart and the BFS cannot grow.  Rooms use 0.02 because they
+                           # are metres; do not copy the semseg value.
+    vccs_w_s=0.4, vccs_w_f=1.0,   # spatial and normal weights of VCCS Eq. 1 (colour is OFF:
+                           # ShapeNetPart ships geometry only, so the cue is dropped, not zeroed)
+    vccs_seed='fps',       # targets a specific supervoxel count, so VCCS is comparable to the
+                           # other partitions at matched region counts
+    vccs_boundary=0.0,     # extra BFS cost for crossing a normal discontinuity
     sparse_iters=50,       # subspace-iteration steps for embed='sparse'.  Fewer steps leave
                            # the embedding less converged, which fragments clusters and so
                            # inflates the region count -- compare at matched REGIONS, never

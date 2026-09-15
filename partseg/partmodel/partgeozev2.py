@@ -54,7 +54,9 @@ class PartGeoZeV2(nn.Module):
     def __init__(self, n_sp=64, knn=10, th_f=0.5, th_n=0.3, rounds=0, part='spectral',
                  center=True, alpha=1.0, gamma0=0.0, w_x=1.0, w_n=1.0, w_g=1.0, w_v=0.0,
                  self_tune=False, n_ev=0, embed='dense', n_land=256, ortho=False,
-                 land='curve', seed='curve', sparse_iters=50, refine=0, min_size=4,
+                 land='curve', seed='curve', sparse_iters=50, vccs_voxel=0.05,
+                 vccs_w_s=0.4, vccs_w_f=1.0, vccs_seed='fps', vccs_boundary=0.0,
+                 refine=0, min_size=4,
                  split=True, eig_dtype=torch.float32):
         super().__init__()
         self.n_sp, self.knn, self.part, self.center, self.alpha = n_sp, knn, part, center, alpha
@@ -63,6 +65,8 @@ class PartGeoZeV2(nn.Module):
         self.embed, self.n_land, self.refine = embed, n_land, refine
         self.ortho, self.land, self.seed = ortho, land, seed
         self.sparse_iters = sparse_iters
+        self.vccs = dict(vccs_voxel=vccs_voxel, vccs_w_s=vccs_w_s, vccs_w_f=vccs_w_f,
+                         vccs_seed=vccs_seed, vccs_boundary=vccs_boundary)
         self.hier = HierMerge(rounds, th_f, th_n)
         self.gattn = InterStructuralAttn(gamma0, colour_gate=False)
 
@@ -75,7 +79,7 @@ class PartGeoZeV2(nn.Module):
                            self_tune=self.self_tune, n_ev=self.n_ev,
                            embed=self.embed, n_land=self.n_land, refine=self.refine,
                            ortho=self.ortho, land=self.land, seed=self.seed,
-                           sparse_iters=self.sparse_iters,
+                           sparse_iters=self.sparse_iters, **self.vccs,
                            split=self.split,
                            min_size=self.min_size, eig_dtype=self.eig_dtype)
 
