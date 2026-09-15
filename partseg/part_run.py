@@ -223,7 +223,7 @@ if __name__ == '__main__':
     parser.add_argument('--tag', default='')
     parser.add_argument('--out', default='', help='json with per-class and per-shape results')
     parser.add_argument('--part', default=None,
-                        choices=[None, 'kmeans', 'spectral', 'vccs', 'fps'])
+                        choices=[None, 'kmeans', 'spectral', 'vccs', 'vccs_gpu', 'fps'])
     parser.add_argument('--vccs_seed', default=None, choices=[None, 'fps', 'grid', 'zcurve'])
     parser.add_argument('--embed', default=None,
                         choices=[None, 'sparse', 'dense', 'nystrom', 'lobpcg'])

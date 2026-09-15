@@ -81,7 +81,8 @@ best_vweight = {
 # command line (`python part_run.py --model v2 --th_f 0.6`); see probe_partition.py for the
 # measurements behind the partition choice and the merge thresholds.
 best_param_v2 = dict(
-    part='kmeans',         # superpoints: kmeans | spectral | vccs | fps  (partmodel/spectral.py).
+    part='kmeans',         # superpoints: kmeans | spectral | vccs_gpu | vccs | fps
+                           # (partmodel/spectral.py).
                            # MEASURED default.  Oracle IoU at 64 regions, mean over 7 categories:
                            #   fps 80.54 @ 0.65 ms | kmeans 82.86 @ 1.93 | kmeans+refine 83.00 @
                            #   2.19 | Nystrom-ortho 82.90 @ 10.57 | dense spectral 84.20 @ 37.31.

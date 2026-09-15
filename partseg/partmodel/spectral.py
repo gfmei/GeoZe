@@ -469,6 +469,90 @@ def graph_taus(xyz, nrm, gfe, idx, self_tune=False):
 # --------------------------------------------------------------------------- #
 #  VCCS: the partition semseg uses, at object scale                            #
 # --------------------------------------------------------------------------- #
+def vccs_gpu(xyz, nrm, idx, n_sp, w_s=0.4, w_f=1.0, seed='fps', max_iter=10, max_layers=128,
+             boundary_weight=0.0, boundary_thresh=0.5):
+    """VCCS on the point kNN graph instead of the voxel 26-neighbourhood -- batched, on the GPU.
+
+    The vendored `semseg/semmodel/vccs.py` is numpy on the CPU and runs one shape at a time
+    (36.7 ms/shape at object scale, against 2.6 for k-means).  Almost all of that is structural
+    rather than algorithmic: voxelising, then building a CSR adjacency over the occupied voxels,
+    then a python-level BFS.  But nothing in the algorithm needs the VOXEL grid specifically --
+    it needs a connectivity graph, a distance to the seed, and a rule for resolving concurrent
+    claims.  We already build a kNN graph on the GPU, so the same three pieces port directly:
+
+        distance      D = sqrt( w_s * ||x_i - x_s||^2 / (3 R^2) + w_f * (1 - |n_i . n_s|)^2 )
+                      i.e. Eq. 1 of Papon et al. with the colour term dropped (ShapeNetPart has
+                      no colour), and R the mean nearest-seed spacing rather than a grid pitch
+        growth        flow-constrained: an unassigned point may only be claimed by a cluster that
+                      already owns one of its neighbours, so regions stay connected
+        claims        concurrent claims resolved by minimum D, exactly as `_grow` does
+        seed update   each seed moves to the member nearest its cluster centroid
+
+    Every step is a gather or a scatter over [B,N,k], so the whole thing is batched and stays on
+    the GPU.  This is the VCCS ALGORITHM on a different connectivity structure, not a
+    reimplementation of the released code -- the partitions are similar but not identical, and
+    `--part vccs` remains available for the exact CPU version.
+    """
+    B, N, k = idx.shape
+    dev = xyz.device
+    nrm = F.normalize(nrm, dim=-1)
+    sidx = (curve_sample(xyz, n_sp) if seed == 'curve'
+            else farthest_point_sample(xyz, n_sp, is_center=True))          # [B,S]
+    S = sidx.shape[1]
+    ar = torch.arange(B, device=dev).unsqueeze(1)
+    nb_n = gather_nb(nrm, idx)
+    bnd = (1 - (nrm.unsqueeze(2) * nb_n).sum(-1).abs()) if boundary_weight else None
+
+    lab = torch.full((B, N), -1, dtype=torch.long, device=dev)
+    for _ in range(max_iter):
+        sx, sn = xyz[ar, sidx], nrm[ar, sidx]                               # [B,S,3]
+        # R: mean distance from a seed to its nearest other seed -- the graph's own "seed pitch"
+        dss = torch.cdist(sx, sx) + torch.eye(S, device=dev).unsqueeze(0) * 1e9
+        R2 = (dss.min(-1).values.mean(-1).clamp_min(EPS) ** 2).view(B, 1, 1)
+
+        lab = torch.full((B, N), -1, dtype=torch.long, device=dev)
+        lab.scatter_(1, sidx, torch.arange(S, device=dev).expand(B, S))
+        for _ in range(max_layers):
+            free = lab < 0
+            if not free.any():
+                break
+            nl = gather_s(lab, idx)                                          # [B,N,k]
+            ok = (nl >= 0) & free.unsqueeze(-1)
+            if not ok.any():
+                break
+            cl = nl.clamp_min(0)
+            d_s = (xyz.unsqueeze(2) - sx[ar.unsqueeze(-1), cl]).pow(2).sum(-1)
+            d_f = 1 - (nrm.unsqueeze(2) * sn[ar.unsqueeze(-1), cl]).sum(-1).abs()
+            cost = (w_s * d_s / (3 * R2) + w_f * d_f.pow(2)).sqrt()
+            if bnd is not None:                    # soft barrier at a normal discontinuity
+                cost = cost + boundary_weight * (bnd > (1 - boundary_thresh)).to(cost.dtype)
+            cost = cost.masked_fill(~ok, float('inf'))
+            best, arg = cost.min(-1)
+            take = torch.isfinite(best)
+            lab = torch.where(take, nl.gather(-1, arg.unsqueeze(-1)).squeeze(-1), lab)
+
+        # seed update: the member nearest its cluster centroid
+        cl = lab.clamp_min(0)
+        cnt = torch.zeros(B, S, device=dev).scatter_add_(1, cl, (lab >= 0).to(xyz.dtype))
+        cen = torch.zeros(B, S, 3, device=dev, dtype=xyz.dtype).scatter_add_(
+            1, cl.unsqueeze(-1).expand(-1, -1, 3), xyz * (lab >= 0).unsqueeze(-1))
+        cen = cen / cnt.clamp_min(1).unsqueeze(-1)
+        dc = (xyz - cen[ar, cl]).norm(dim=-1).masked_fill(lab < 0, float('inf'))
+        bestd = torch.full((B, S), float('inf'), device=dev).scatter_reduce_(1, cl, dc, 'amin')
+        hit = (dc <= bestd[ar, cl] + 1e-9) & (lab >= 0)
+        new = sidx.clone()
+        pts = torch.arange(N, device=dev).expand(B, N)
+        new.scatter_reduce_(1, cl.masked_fill(~hit, S - 1), pts.masked_fill(~hit, N), 'amin',
+                            include_self=False)
+        keep = (new < N) & (cnt > 0)
+        sidx = torch.where(keep, new.clamp(0, N - 1), sidx)
+
+    if (lab < 0).any():                            # a component with no seed -> nearest seed
+        near = torch.cdist(xyz, xyz[ar, sidx]).argmin(-1)
+        lab = torch.where(lab < 0, near, lab)
+    return lab
+
+
 def vccs_superpoints(xyz, nrm, n_sp, voxel_res=0.05, w_s=0.4, w_f=1.0, seed_mode='fps',
                      boundary_weight=0.0, boundary_thresh=0.5, use_geodesic=False, max_iter=10):
     """Voxel Cloud Connectivity Segmentation, per shape.  Returns flat [B*N] region ids.
@@ -634,6 +718,10 @@ def superpoints(xyz, nrm, gfe, idx, n_sp=64, method='spectral', w_x=1.0, w_n=1.0
     elif method == 'vccs':
         lab = vccs_superpoints(xyz, nrm, n_sp, voxel_res=vccs_voxel, w_s=vccs_w_s, w_f=vccs_w_f,
                                seed_mode=vccs_seed, boundary_weight=vccs_boundary)
+    elif method == 'vccs_gpu':
+        lab = vccs_gpu(xyz, nrm, idx, n_sp, w_s=vccs_w_s, w_f=vccs_w_f,
+                       seed='curve' if vccs_seed == 'zcurve' else 'fps',
+                       boundary_weight=vccs_boundary)
     else:
         raise ValueError(f'unknown partition method {method!r}')
 
