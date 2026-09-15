@@ -189,6 +189,7 @@ Aggregation only (partition, pooling, classification), one A100, batches of 15 s
 | farthest-point Voronoi + pooling | 53.59 | 54.91 | 1.07 |
 | **PartGeoZe v2** (k-means + refinement) | 54.18 | 55.26 | **2.57** |
 | **PartGeoZe v2** (sparse spectral) | **54.44** | **55.32** | 8.54 |
+| VCCS + pooling | 53.92 | 55.08 | 36.71 |
 | GeoZe | **56.12** | **57.18** | 40.30 |
 | partition oracle | 85.79 | 87.04 | — |
 
@@ -206,6 +207,11 @@ a noisy feature can not corrupt the regions it will later be pooled over. Two ad
   LCCP criterion, so the affinity penalises concave edges and leaves convex ones free. It needs
   consistently oriented normals, and the cached ones are unoriented, so the signs are resolved by
   relaxing an Ising problem over the $knn$ graph. Boundary recall 71.1 → 72.7.
+* **A VCCS option.** `--part vccs` runs the same supervoxels `semseg` uses on ScanNet, adapted to
+  object scale (colour cue dropped, voxel size raised above the point spacing, a target count via
+  FPS seeding). It gives the best boundary recall of any partition here, 86.5, but loses ~3.7
+  oracle IoU at matched region counts and ~0.5 class-mIoU on the end task, at 4-15x the cost
+  since it is CPU numpy.
 * **A sparse spectral solve.** The operator is only ever *applied* — a gather for $Wx$ and the
   matching scatter-add for $W^{\top}x$ — so nothing $N \times N$ is allocated. At matched region
   counts it equals or beats a full eigendecomposition at **2–6x less time**, which makes the dense

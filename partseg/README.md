@@ -42,6 +42,16 @@ will later be pooled over. This is the same rule `semseg/sem_prep.py` follows fo
 
 ### Superpoints
 
+`--part` selects the method. All four are built from geometry alone and never from the VLM
+feature, so a noisy feature can not corrupt the regions it will later be pooled over.
+
+| `--part` | what it is | where it runs |
+|---|---|---|
+| `kmeans` *(default)* | weighted k-means in the cue space below | GPU, batched |
+| `spectral` | normalised cut; `--embed sparse\|dense\|nystrom\|lobpcg` | GPU, batched |
+| `vccs` | Voxel Cloud Connectivity Segmentation — what `semseg` uses on ScanNet | CPU, per shape |
+| `fps` | farthest-point Voronoi cells (the weakest baseline) | GPU, batched |
+
 A shape is ~2k points, so the affinity is dense and batched. On the symmetric kNN graph,
 
     w_ij = exp( - sum_cue  w_cue * d_cue(i,j) / tau_cue )
@@ -111,6 +121,36 @@ is likewise available and likewise not the default: at 2048 points the exact dis
 IoU and ~10 points of boundary recall. It is the right structure at scene scale, not at object
 scale.
 
+### VCCS at object scale
+
+`--part vccs` runs the algorithm `semseg/sem_prep.py` uses on ScanNet rooms, through the vendored
+[`semseg/semmodel/vccs.py`](../semseg/semmodel/vccs.py). Three things differ at object scale and
+`vccs_superpoints` handles all three:
+
+* **No colour.** ShapeNetPart ships geometry only, so the colour term of Eq. 1 is switched off
+  rather than fed zeros, which would make every pair look identical on that cue.
+* **Scale.** The released room settings assume metres. A ShapeNet shape is unit-sphere normalised
+  with ~0.05 point spacing at 2048 points, and `vccs_voxel` must be at least that or the
+  26-connectivity adjacency falls apart and the BFS cannot grow. Do not copy the `semseg` value.
+* **A target count.** `vccs_seed='fps'` asks for a specific supervoxel count, so VCCS is
+  comparable at matched region counts rather than at some seed resolution.
+
+It works, and on this task it is **dominated** — worth stating plainly, because VCCS is the
+obvious thing to reach for given `semseg`:
+
+| partition | ~regions | oracle IoU | boundary recall | end-task class-mIoU | ms/shape |
+|---|---|---|---|---|---|
+| VCCS | 78.1 | 81.37 | **86.50** | 53.92 | 36.71 |
+| k-means + refinement | 66.4 | 83.00 | 72.73 | **54.18** | **2.57** |
+| sparse spectral | 79.0 | **85.03** | 75.62 | **54.44** | 8.54 |
+
+VCCS wins **boundary recall** by a wide margin — compact BFS-grown supervoxels hug geometric
+edges — but loses ~3.7 oracle IoU at a matched region count and ~0.5 class-mIoU on the end task,
+at 4–15x the cost, because it is CPU numpy while the others are batched on the GPU. Its
+boundary-aware BFS (`vccs_boundary`, the analogue of the concavity cue) did not help either:
+81.03 against 81.37. It stays a first-class option: it is the honest cross-check against the
+scene pipeline, and the best choice if boundary adherence is what you need.
+
 ## Usage
 
 ```bash
@@ -128,9 +168,11 @@ python probe_superpoints.py            # partition quality sweep
 python probe_partition.py              # merge-criterion analysis
 ```
 
-Partition knobs: `--part spectral|kmeans|fps`, `--embed nystrom|dense`, `--n_land`, `--ortho`,
-`--n_sp`, `--w_v` (concavity), `--no_self_tune`, `--refine`, `--knn`. Merge knobs: `--rounds`,
-`--th_f`, `--th_n`. Everything defaults from `partmodel/best_param.py`.
+Partition knobs: `--part kmeans|spectral|vccs|fps`, `--embed sparse|dense|nystrom|lobpcg`,
+`--n_sp`, `--w_v` (concavity), `--refine`, `--knn`, `--no_self_tune`, `--n_land`, `--ortho`,
+`--sparse_iters`, `--vccs_voxel`, `--vccs_seed`, `--vccs_boundary`. Merge knobs: `--rounds`,
+`--th_f`, `--th_n`. Everything defaults from `partmodel/best_param.py` — note `refine=3` is
+already on there, so `--refine 0` is what turns boundary refinement off.
 
 ## Two findings that constrain any claim made here
 
@@ -182,6 +224,7 @@ the aggregation only (partition, pooling, classification), one A100, batches of 
 | farthest-point Voronoi + pooling, 64 | 53.59 | 54.91 | 76.99 | 1.07 |
 | **PartGeoZe v2**, k-means + refinement, 32 | 54.18 | 55.26 | 77.32 | **2.57** |
 | **PartGeoZe v2**, sparse spectral, 32 | **54.44** | **55.32** | **77.52** | 8.54 |
+| VCCS + pooling, 64 | 53.92 | 55.08 | 77.21 | 36.71 |
 | GeoZe (`partgeoze.py`) | **56.12** | **57.18** | **78.37** | 40.30 |
 | partition oracle (sparse, 48) | 85.79 | 87.04 | 95.43 | — |
 
@@ -228,6 +271,8 @@ partition can close. Tune `n_sp` on the end task, never on oracle IoU.
 | multi-curve kNN | -0.9 oracle, -10 boundary recall | exact kNN is already 0.19 ms at 2048 points |
 | boundary refinement on a spectral embedding | +0.04 oracle | it only pays on k-means, where it is the concavity cue's only route in |
 | Zelnik-Manor local scaling | ~0 | |
+| VCCS supervoxels | -0.5 class-mIoU at 14x the cost | best boundary recall here, but lower oracle at matched regions, and CPU-bound |
+| VCCS boundary-aware BFS | 81.03 vs 81.37 oracle | |
 | more landmarks (512) | worse everywhere | |
 
 ## Reproducing
@@ -237,6 +282,7 @@ bash run_final.sh        # the headline table
 bash run_default.sh      # the shipped configuration
 bash run_solver.sh       # sparse vs k-means on the end task
 bash run_layout.sh       # the feature-layout ablation
+bash run_vccs.sh         # the VCCS partition, end task and ceiling
 python probe_superpoints.py --n_sp 32 48 64 96 128   # partition quality at matched counts
 python bench_part.py --cls chair                     # stage-by-stage timing
 ```

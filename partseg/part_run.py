@@ -144,7 +144,8 @@ def extract_feature_maps(model_name, data_path, class_choice, device):
 
 V2_KEYS = ('part', 'n_sp', 'knn', 'w_x', 'w_n', 'w_g', 'w_v', 'min_size', 'th_f', 'th_n',
            'rounds', 'alpha', 'gamma0', 'n_ev', 'embed', 'n_land', 'refine', 'land', 'seed',
-           'sparse_iters')
+           'sparse_iters', 'vccs_voxel', 'vccs_w_s', 'vccs_w_f', 'vccs_seed',
+           'vccs_boundary')
 
 
 def main(args):
@@ -221,14 +222,17 @@ if __name__ == '__main__':
                         help='the searched per-part sentences, or `a {part} of a {category}`')
     parser.add_argument('--tag', default='')
     parser.add_argument('--out', default='', help='json with per-class and per-shape results')
-    parser.add_argument('--part', default=None, choices=[None, 'spectral', 'kmeans', 'fps'])
+    parser.add_argument('--part', default=None,
+                        choices=[None, 'kmeans', 'spectral', 'vccs', 'fps'])
+    parser.add_argument('--vccs_seed', default=None, choices=[None, 'fps', 'grid', 'zcurve'])
     parser.add_argument('--embed', default=None,
                         choices=[None, 'sparse', 'dense', 'nystrom', 'lobpcg'])
     parser.add_argument('--no_self_tune', action='store_true', help='drop local scaling of the position cue')
     parser.add_argument('--ortho', action='store_true', help='Nystrom: orthogonalised extension')
     parser.add_argument('--land', default=None, choices=[None, 'curve', 'fps'])
     parser.add_argument('--seed', default=None, choices=[None, 'curve', 'fps'])
-    for k in ('th_f', 'th_n', 'alpha', 'gamma0', 'w_x', 'w_n', 'w_g', 'w_v'):
+    for k in ('th_f', 'th_n', 'alpha', 'gamma0', 'w_x', 'w_n', 'w_g', 'w_v',
+              'vccs_voxel', 'vccs_w_s', 'vccs_w_f', 'vccs_boundary'):
         parser.add_argument(f'--{k}', type=float, default=None)
     for k in ('n_sp', 'knn', 'rounds', 'min_size', 'n_ev', 'n_land', 'refine',
               'sparse_iters'):

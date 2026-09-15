@@ -15,6 +15,7 @@ scale and there is no per-dataset temperature to tune.  Two cheaper partitions (
 concatenated cue space and plain `fps` Voronoi cells, which is what GeoZe's down_sample starts
 from) are kept for the ablation in probe_partition.py.
 """
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -466,6 +467,52 @@ def graph_taus(xyz, nrm, gfe, idx, self_tune=False):
 
 
 # --------------------------------------------------------------------------- #
+#  VCCS: the partition semseg uses, at object scale                            #
+# --------------------------------------------------------------------------- #
+def vccs_superpoints(xyz, nrm, n_sp, voxel_res=0.05, w_s=0.4, w_f=1.0, seed_mode='fps',
+                     boundary_weight=0.0, boundary_thresh=0.5, use_geodesic=False, max_iter=10):
+    """Voxel Cloud Connectivity Segmentation, per shape.  Returns flat [B*N] region ids.
+
+    The same algorithm `semseg/sem_prep.py` runs on ScanNet rooms, applied to objects.  Three
+    things differ at object scale and all three are handled here:
+
+      * **No colour.**  ShapeNetPart ships geometry only, so the colour term of Eq. 1 is switched
+        off rather than fed zeros, which would make every pair look identical on that cue.
+      * **Scale.**  Rooms are metres and the released settings (voxel 0.02, seed 0.25) assume it;
+        a ShapeNet shape is unit-sphere normalised, so `voxel_res` has to be at least the point
+        spacing (~0.05 at 2048 points) or the 26-connectivity adjacency falls apart and the BFS
+        cannot grow.
+      * **A target count.**  `seed_mode='fps'` with `n_superpoints` asks for a specific number of
+        supervoxels, so VCCS can be compared against the other partitions at matched region
+        counts instead of at some seed resolution that happens to be comparable.
+
+    Numpy on the CPU, one shape at a time -- this is the only partition here that leaves the GPU.
+    """
+    from semseg.semmodel.vccs import VCCS, VccsParams
+
+    B, N, _ = xyz.shape
+    dev = xyz.device
+    x_np = xyz.detach().cpu().double().numpy()
+    n_np = F.normalize(nrm, dim=-1).detach().cpu().double().numpy()
+    par = VccsParams(voxel_res=voxel_res, w_s=w_s, w_f=w_f, color=False, normal=True,
+                     n_superpoints=n_sp, seed_mode=seed_mode, max_iter=max_iter,
+                     boundary_weight=boundary_weight, boundary_thresh=boundary_thresh,
+                     use_geodesic=use_geodesic)
+    out = np.empty((B, N), dtype=np.int64)
+    for b in range(B):
+        lab = VCCS(par).fit(x_np[b], None, n_np[b])[0]
+        if (lab < 0).any():                       # unreached voxel -> nearest assigned neighbour
+            from scipy.spatial import cKDTree
+            bad = lab < 0
+            if (~bad).any():
+                lab[bad] = lab[~bad][cKDTree(x_np[b][~bad]).query(x_np[b][bad])[1]]
+            else:
+                lab[:] = 0
+        out[b] = np.unique(lab, return_inverse=True)[1]
+    return torch.from_numpy(out).to(dev)
+
+
+# --------------------------------------------------------------------------- #
 #  cleanup                                                                     #
 # --------------------------------------------------------------------------- #
 def connected_components(lab, idx, max_iter=256):
@@ -538,7 +585,9 @@ def absorb_small(seg, idx, min_size, passes=3):
 def superpoints(xyz, nrm, gfe, idx, n_sp=64, method='spectral', w_x=1.0, w_n=1.0, w_g=1.0,
                 w_v=0.0, self_tune=False, n_ev=0, orient=True, embed='dense', n_land=256,
                 refine=0, split=True, min_size=4, kmeans_iters=20, eig_dtype=torch.float32,
-                land='curve', seed='curve', ortho=False, sparse_iters=30):
+                land='curve', seed='curve', ortho=False, sparse_iters=30,
+                vccs_voxel=0.05, vccs_w_s=0.4, vccs_w_f=1.0, vccs_seed='fps',
+                vccs_boundary=0.0):
     """Partition a batch of shapes into superpoints.  Returns flat [B*N] region ids, contiguous
     and grouped by shape, so `seg.max()+1` is the total region count of the batch.
 
@@ -582,6 +631,9 @@ def superpoints(xyz, nrm, gfe, idx, n_sp=64, method='spectral', w_x=1.0, w_n=1.0
                      seed_xyz=xyz)
     elif method == 'fps':
         lab = kmeans(xyz, n_sp, 0, seed=seed, seed_xyz=xyz)
+    elif method == 'vccs':
+        lab = vccs_superpoints(xyz, nrm, n_sp, voxel_res=vccs_voxel, w_s=vccs_w_s, w_f=vccs_w_f,
+                               seed_mode=vccs_seed, boundary_weight=vccs_boundary)
     else:
         raise ValueError(f'unknown partition method {method!r}')
 
