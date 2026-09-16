@@ -122,6 +122,59 @@ is likewise available and likewise not the default: at 2048 points the exact dis
 IoU and ~10 points of boundary recall. It is the right structure at scene scale, not at object
 scale.
 
+### Cut pursuit, rewritten batched on the GPU
+
+[`cutpursuit.py`](cutpursuit.py) is a GPU rewrite of cut pursuit (Landrieu & Obozinski 2017), the
+partition Superpoint Graph uses, following the NumPy + PyMaxflow reference at
+[truebelief/CutPursuit](https://github.com/truebelief/CutPursuit). It minimises
+
+    E(x) = sum_i ||x_i - y_i||^2  +  lambda * sum_{(i,j) in E} w_ij * [x_i != x_j]
+
+by alternating a split step with a reduce step. Everything in it is a scatter-reduce and batches
+directly **except the split**, which the reference does by an exact max-flow, per component, in a
+Python loop. Both solvers are implemented here and share the split proposal, the accept test and
+the energy evaluation, so the only difference is the binary step:
+
+| | regions | oracle IoU | BR | ms/shape |
+|---|---|---|---|---|
+| exact max-flow (reference) | 34.2 | 79.91 | 45.75 | 10.9 |
+| **parallel conditional modes (GPU)** | 34.3 | **80.01** | 45.90 | **3.6** |
+| exact max-flow | 67.0 | 84.19 | 63.34 | 14.3 |
+| **parallel conditional modes (GPU)** | 67.1 | **84.19** | 63.38 | **4.5** |
+| exact max-flow | 125.6 | **88.21** | 79.89 | 19.0 |
+| **parallel conditional modes (GPU)** | 125.8 | 88.17 | 79.94 | **5.2** |
+
+**Replacing the exact min-cut with a parallel local search costs nothing measurable** — the two
+agree to within 0.04 oracle IoU at every resolution — and the batched version is **3.0–3.7x
+faster** end to end. (The gap on the split step alone is larger; these timings include the kNN
+graph, cues and affinity, which are shared.)
+
+**Cut pursuit is the best partition measured here**, by oracle IoU: 88.17 at 126 regions against
+87.78 for sparse spectral and 87.17 for k-means, and 80.01 at 34 regions against 76.64 for
+k-means. **And it is worse on the end task**: 53.75 class-mIoU against 54.82, at a matched region
+count. That is the sharpest form of the result in the next section — a partition can be
+substantially purer and still classify worse.
+
+The reason is visible in the region sizes. Cut pursuit splits where the geometric signal varies,
+so it spends regions on detailed parts and leaves smooth ones coarse:
+
+| partition | regions | median size | 10th pct | size CV | regions under 8 points |
+|---|---|---|---|---|---|
+| k-means | 33.8 | 60 | 29 | 0.40 | 0.8% |
+| cut pursuit | 34.8 | 52 | 18 | **0.63** | **2.9%** |
+| k-means | 65.8 | 30 | 16 | 0.41 | 2.0% |
+| cut pursuit | 67.6 | 26 | 9 | **0.66** | **6.2%** |
+
+A region that holds nine points pools nine VLM features, and its mean is correspondingly noisy.
+Cut pursuit produces three times as many such regions, and it produces them exactly on the
+detailed parts where the classification is already hardest. Purity is not what this task is short
+of; points per region is.
+
+```bash
+python cutpursuit.py --solvers icm maxflow --rounds 5 6 7   # the table above (needs PyMaxflow)
+python simple_geoze.py --classchoice all --part cutpursuit --n_sp 32
+```
+
 ### VCCS at object scale
 
 `--part vccs` runs the algorithm `semseg/sem_prep.py` uses on ScanNet rooms, through the vendored
@@ -342,6 +395,7 @@ partition can close. Tune `n_sp` on the end task, never on oracle IoU.
 | Hilbert-curve k-means seeding | **-0.41** class-mIoU | adopted to kill a cost that only exists at 256 Nystrom landmarks; at 32 cluster seeds the loop is 32 iterations and the spread matters. `seed='fps'`, `land='curve'` |
 | VCCS supervoxels | -0.5 class-mIoU at 14x the cost | best boundary recall here, but lower oracle at matched regions, and CPU-bound |
 | VCCS boundary-aware BFS | 81.03 vs 81.37 oracle (CPU), 83.57 vs 83.29 (GPU) | within noise either way |
+| cut pursuit | best oracle IoU of any partition, **-1.07** class-mIoU | it spends regions where the geometry varies, so 6.2% of them hold under 8 points |
 | more landmarks (512) | worse everywhere | |
 
 ## Reproducing

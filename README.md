@@ -236,6 +236,20 @@ a noisy feature can not corrupt the regions it will later be pooled over. Two ad
 k-means in the same cue space matches the full spectral solve once you ask for ≥96 regions, at a
 seventeenth of the time: **the cues carry the partition, not the clustering algorithm.**
 
+### Cut pursuit, batched on the GPU
+
+[`partseg/cutpursuit.py`](partseg/cutpursuit.py) rewrites cut pursuit (Landrieu &
+Obozinski 2017, the Superpoint Graph partition) for the GPU, against the NumPy + PyMaxflow
+reference. Everything in it batches except the split step, which the reference does by an exact
+max-flow per component; replacing that with a parallel local search **costs nothing measurable**
+(oracle IoU agrees to within 0.04 at every resolution) and runs **3.0–3.7x faster**.
+
+It also produces the **best partition we measured** — 88.17 oracle IoU at 126 regions, against
+87.78 for sparse spectral and 87.17 for k-means — **and the worse end-task result**, 53.75
+class-mIoU against 54.82. The reason is region size: cut pursuit splits where the geometric
+signal varies, so 6.2% of its regions hold fewer than 8 points against 2.0% for k-means, and a
+region that pools nine features has a correspondingly noisy mean.
+
 ### Two results that constrain any claim
 
 **The partition is not what limits the task.** Sweeping resolution moves the ceiling a long way

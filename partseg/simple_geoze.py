@@ -292,10 +292,14 @@ def superpoints(xyz, nrm, fpfh, n_sp=32, k=10, rounds=3, part='kmeans', iters=50
     idx = knn(xyz, k)
     X, g, n = cue_features(xyz, nrm, fpfh, idx)
     w = affinity(xyz, n, g, idx) if (rounds or part == 'spectral') else None
-    lab = kmeans(spectral(w, idx, n_sp, iters), xyz, n_sp, seed=seed) \
-        if part == 'spectral' else kmeans(X, xyz, n_sp, seed=seed)
+    if part == 'cutpursuit':
+        from partseg.cutpursuit import cutpursuit
+        lab = cutpursuit(X, w, idx, lam=1.0, rounds=max(1, int(n_sp - 1).bit_length()))
+    else:
+        lab = kmeans(spectral(w, idx, n_sp, iters), xyz, n_sp, seed=seed) \
+            if part == 'spectral' else kmeans(X, xyz, n_sp, seed=seed)
     if rounds:
-        lab = relabel(lab, w, idx, n_sp, rounds)
+        lab = relabel(lab, w, idx, int(lab.max()) + 1, rounds)
     return split_and_clean(lab, idx)
 
 
@@ -335,7 +339,8 @@ def main():
     ap.add_argument('--n_sp', type=int, default=32)
     ap.add_argument('--knn', type=int, default=10)
     ap.add_argument('--rounds', type=int, default=3)
-    ap.add_argument('--part', default='kmeans', choices=['kmeans', 'spectral'])
+    ap.add_argument('--part', default='kmeans',
+                    choices=['kmeans', 'spectral', 'cutpursuit'])
     ap.add_argument('--seed', default='fps', choices=['fps', 'curve'])
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--device', default='cuda:0')
