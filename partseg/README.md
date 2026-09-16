@@ -187,15 +187,31 @@ of this whole investigation — the machinery that is absent from it is absent b
 measured and did not pay.
 
 ```bash
-python simple_geoze.py --classchoice all      # 54.82 class-mIoU, 1.72 ms/shape
+python simple_geoze.py --classchoice all      # 54.82 class-mIoU, 1.69 ms/shape
+python simple_geoze.py --classchoice all --part spectral --n_sp 128   # 53.26, 41.31 ms
 ```
 
 | | class-mIoU | ms/shape |
 |---|---|---|
-| `simple_geoze.py`, 32 superpoints | **54.82** | **1.72** |
+| `simple_geoze.py`, 32 superpoints | **54.82** | **1.69** |
 | the same without boundary refinement | 54.77 | 1.48 |
+| `--part spectral --n_sp 32` | 54.75 | 15.30 |
+| `--part spectral --n_sp 64` | 53.92 | 22.94 |
+| `--part spectral --n_sp 128` | 53.26 | 41.31 |
 | full pipeline, `--part kmeans` | 54.59 | 2.65 |
 | GeoZe | 56.12 | 40.30 |
+
+The sparse spectral partition is available (`--part spectral`) and is the better *partition* at a
+matched region count, but it does not pay on the end task at any resolution, and 128 superpoints
+is the worst setting of both: it is the same non-monotonicity as
+[the resolution sweep](#the-partition-is-not-what-limits-the-end-task).
+
+Every step is batched across shapes and the Python loops are over algorithm iterations, never
+over points or shapes. Two that had no early exit were removed or bounded: seeding is now a
+Z-order stride (`--seed curve`, one sort and a loop over 10 bits) instead of a farthest-point
+pass sequential in `K` (0.50 -> 0.07 ms/shape at 128 seeds, though it costs ~0.4 class-mIoU, so
+`fps` stays the default), and the spectral operator is one sparse matmul over the flattened
+batch rather than a `[B,N,k,m]` gather rebuilt each iteration (41.9 -> 38.9 ms at `n_sp` 128).
 
 Read it before `partmodel/`: the package carries four partitions, four eigensolvers, a merging
 stage and an attention stage because each had to be measured, and almost none of it earned its
@@ -276,7 +292,7 @@ the aggregation only (partition, pooling, classification), one A100, batches of 
 | **PartGeoZe v2**, sparse spectral, 32 | **54.44** | **55.32** | **77.52** | 8.54 |
 | VCCS + pooling, 64 | 53.92 | 55.08 | 77.21 | 36.71 |
 | **VCCS on the kNN graph (`vccs_gpu`), 32** | 54.47 | 55.52 | 77.39 | 5.09 |
-| **`simple_geoze.py`, 32** | **54.82** | **55.59** | — | **1.72** |
+| **`simple_geoze.py`, 32** | **54.82** | **55.59** | — | **1.69** |
 | GeoZe (`partgeoze.py`) | **56.12** | **57.18** | **78.37** | 40.30 |
 | partition oracle (sparse, 48) | 85.79 | 87.04 | 95.43 | — |
 
