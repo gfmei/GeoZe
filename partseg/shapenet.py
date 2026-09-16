@@ -188,3 +188,26 @@ class ShapeNetPart(Dataset):
 
     def __len__(self):
         return self.data.shape[0]
+
+
+# --------------------------------------------------------------------------- #
+#  cached multi-view features                                                  #
+# --------------------------------------------------------------------------- #
+def load_class(class_choice, model_name='ViT-B/16', root='output'):
+    """The cached tensors of one category, on the CPU.
+
+    `part_run.py --classchoice <cat>` writes these once (the CLIP pass over ten rendered views is
+    the expensive part); everything downstream reads them back.
+    """
+    import os.path as osp
+
+    import torch
+
+    from partseg.partmodel.post_search import cat2id, index_start, view_tokens
+
+    p = osp.join(root, model_name.replace('/', '_'), class_choice)
+    ld = lambda n: torch.load(osp.join(p, f'test_{n}.pt'), map_location='cpu')  # noqa: E731
+    return dict(feat=view_tokens(ld('features')),
+                label=ld('labels') - index_start[cat2id[class_choice]],
+                ifseen=ld('ifseen'), pointloc=ld('pointloc'), pc=ld('pc'),
+                normal=ld('normal'), fpfh=ld('fpfh'))

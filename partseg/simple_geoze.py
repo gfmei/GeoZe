@@ -1,23 +1,34 @@
-"""SimpleGeoZe -- superpoint pooling and label propagation, in one file.
+"""SimpleGeoZe -- superpoint pooling and label propagation for zero-shot part segmentation.
 
-This is the whole method that survived measurement, written linearly and with no options.
-`partmodel/` carries four partitions, four eigensolvers, a merging stage and an attention stage
-because each had to be measured; almost none of it paid, and what is left is short enough to read
-in one sitting:
+The method, in four steps and no options:
 
     1. a geometry-only partition          k-means over position + normals + FPFH, then a few
                                           rounds of affinity-weighted boundary refinement
     2. pool the VLM feature per region    a masked mean of the unit features
     3. classify the REGIONS               S x D against the text table, not N x D
-    4. propagate the label to points      exact, since argmax of a broadcast vector is the
+    4. propagate the label to points      exact, since the argmax of a broadcast vector is the
                                           broadcast of its argmax
 
 Nothing here touches the VLM feature until step 2, so a noisy feature can never corrupt the
 support it is pooled over.
 
-What was measured and deliberately left out (numbers in partseg/README.md): hierarchical merging
-(-1.81 class-mIoU on parts), intra- and inter-region attention, the spectral solve (+0.3 for 3x
-the time), Nystrom, LOBPCG, and multi-curve kNN.
+ShapeNetPart test, all 16 categories, aggregation only on one A100:
+
+    per-point argmax                 50.53 class-mIoU     0.03 ms/shape
+    this                             54.82                1.71
+    GeoZe (partmodel/partgeoze.py)   56.12               40.30
+    partition oracle                 85.91
+
+So this is a SPEED result: 1.30 class-mIoU behind GeoZe at 24x the speed, and 4.3 ahead of
+classifying points directly.
+
+A long list of richer designs was measured against this one and none of them won -- hierarchical
+merging, intra- and inter-region attention, spectral and cut-pursuit and VCCS partitions, Nystrom
+and LOBPCG solvers. partseg/README.md has the numbers, and the git history has the code. The one
+finding that explains the list: partition quality is not what limits this task. Sweeping the
+superpoint count moves the oracle by 17 class-mIoU and the result by at most 2, and cut pursuit
+buys a strictly purer partition and classifies *worse*, because it spends regions where the
+geometry varies and leaves too few points in each to pool a stable feature.
 
     python simple_geoze.py --classchoice all
 """
@@ -30,25 +41,15 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-sys.path.append(os.path.abspath('../'))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [os.path.dirname(_HERE), _HERE]      # repo root, then partseg/ -- runs from anywhere
 
-EPS = 1e-8
+from common.pointops import EPS, gather_nb, gather_s, knn, seg_mean, split_and_clean  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
 #  partition                                                                   #
 # --------------------------------------------------------------------------- #
-def knn(xyz, k):
-    """[B,N,k] indices of the k nearest neighbours, self excluded.  Dense at 2k points."""
-    return torch.cdist(xyz, xyz).topk(k + 1, dim=-1, largest=False)[1][:, :, 1:]
-
-
-def gather_nb(x, idx):
-    """x [B,N,D], idx [B,N,k] -> [B,N,k,D]."""
-    B, N, k = idx.shape
-    return x.gather(1, idx.reshape(B, N * k, 1).expand(-1, -1, x.shape[-1])).reshape(B, N, k, -1)
-
-
 def cue_features(xyz, nrm, fpfh, idx):
     """The three per-point cues, each scaled so one mean kNN step is one unit.
 
@@ -71,48 +72,29 @@ def cue_features(xyz, nrm, fpfh, idx):
     return torch.cat(out, dim=-1), g, n
 
 
-def morton_seed(xyz, K, depth=10):
-    """K well-spread seeds from ONE sort, with no loop over seeds.
-
-    Farthest-point sampling is the usual choice but it is sequential in K: at 128 seeds that is
-    128 dependent GPU launches. Points adjacent in Z-order are spatially close, so a stride
-    through that order covers the shape evenly for one `argsort`. The only loop here runs over
-    the 10 BITS of the grid, independent of K and of the number of points.
-    """
-    B, N, _ = xyz.shape
-    g = xyz - xyz.amin(1, keepdim=True)
-    g = (g / g.amax(dim=(1, 2)).clamp_min(EPS).view(B, 1, 1) * (2 ** depth - 1))
-    g = g.long().clamp_(0, 2 ** depth - 1)
-    code = torch.zeros(B, N, dtype=torch.long, device=xyz.device)
-    for b in range(depth):
-        m = 1 << b
-        code |= (((g[..., 0] & m) << (2 * b)) | ((g[..., 1] & m) << (2 * b + 1))
-                 | ((g[..., 2] & m) << (2 * b + 2)))
-    order = code.argsort(1)
-    return order.gather(1, torch.linspace(0, N - 1, K, device=xyz.device).long()
-                        .unsqueeze(0).expand(B, K))
-
-
 def fps_seed(xyz, K):
-    """Farthest-point seeds. Sequential in K, kept because it is the quality reference."""
+    """Farthest-point seeds, from the point farthest from the centroid so it is deterministic.
+
+    Sequential in K, and that is a measured choice: a Z-order stride is 7x cheaper in seeding but
+    costs 0.4 class-mIoU at this K, where the loop is only 32 iterations (+0.16 ms/shape).
+    """
     B, N, _ = xyz.shape
     seeds = torch.zeros(B, K, dtype=torch.long, device=xyz.device)
     far = (xyz - xyz.mean(1, keepdim=True)).norm(dim=-1).argmax(1)
     dist = torch.full((B, N), 1e10, device=xyz.device, dtype=xyz.dtype)
-    for _ in range(K):
-        seeds[:, _] = far
+    for i in range(K):
+        seeds[:, i] = far
         d = (xyz - xyz.gather(1, far.view(B, 1, 1).expand(-1, -1, 3))).pow(2).sum(-1)
         dist = torch.minimum(dist, d)
         far = dist.argmax(1)
     return seeds
 
 
-def kmeans(X, xyz, K, iters=20, seed='fps'):
+def kmeans(X, xyz, K, iters=20):
     """Batched k-means. Every step is one batched op; the loop is over Lloyd rounds only."""
-    seeds = morton_seed(xyz, K) if seed == 'curve' else fps_seed(xyz, K)
-    C = X.gather(1, seeds.unsqueeze(-1).expand(-1, -1, X.shape[-1]))
+    C = X.gather(1, fps_seed(xyz, K).unsqueeze(-1).expand(-1, -1, X.shape[-1]))
     lab = None
-    for it in range(iters):
+    for _ in range(iters):
         new = torch.cdist(X, C).argmin(-1)
         if lab is not None and torch.equal(new, lab):
             break
@@ -129,14 +111,16 @@ def orient(xyz, n, idx):
 
     An estimator returns normals up to sign, and the concavity test below is meaningless without
     a consistent orientation.  Maximising sum_ij s_i s_j (n_i.n_j) over the graph is an Ising
-    problem; sign iteration seeded outward from the centroid settles it in about five rounds.
+    problem; sign iteration seeded outward from the centroid settles it in about five rounds and
+    reaches 0.84-0.94 edge agreement depending on category, the low end being thin open surfaces
+    such as table legs where the orientation is genuinely ambiguous.
     """
     B, N, k = idx.shape
     s = torch.sign((n * (xyz - xyz.mean(1, keepdim=True))).sum(-1))
     s = torch.where(s == 0, torch.ones_like(s), s)
     w = (n.unsqueeze(2) * gather_nb(n, idx)).sum(-1)
-    for _ in range(8):                              # settles in about five
-        new = torch.sign((w * s.gather(1, idx.reshape(B, -1)).reshape(B, N, k)).sum(-1))
+    for _ in range(8):
+        new = torch.sign((w * gather_s(s, idx)).sum(-1))
         new = torch.where(new == 0, s, new)
         if torch.equal(new, s):
             break
@@ -147,8 +131,8 @@ def orient(xyz, n, idx):
 def affinity(xyz, n, g, idx):
     """Per-edge affinity over four cues, each divided by its own mean so nothing needs tuning.
 
-    The fourth is CONCAVITY: object parts meet at concave seams (seat/leg, wing/body), so a
-    concave edge is penalised and a convex one is free.
+    The fourth is CONCAVITY: object parts meet at concave seams (seat/leg, wing/body), which is
+    the local-convexity criterion, so a concave edge is penalised and a convex one is free.
     """
     m = orient(xyz, n, idx)
     dx = xyz.unsqueeze(2) - gather_nb(xyz, idx)
@@ -162,83 +146,19 @@ def affinity(xyz, n, g, idx):
     return torch.exp(e)
 
 
-def spectral(w, idx, n_sp, iters=50, over=16):
-    """Normalised-cut embedding without ever forming the N x N matrix.
-
-    The textbook route builds D^-1/2 W D^-1/2 and decomposes it, which at N=2048 costs 35 of the
-    pipeline's 38 ms to keep 3% of its output.  Here the operator is only ever APPLIED: W x is a
-    gather over the kNN edges and W^T x the matching scatter, so nothing N x N is allocated.
-    Subspace iteration with Cholesky-QR extracts the leading block, and a closing Rayleigh-Ritz
-    rotates it onto the eigenvectors -- which matters, because k-means is not invariant to a
-    rotation of the embedding.
-    """
-    B, N, k = idx.shape
-    dev = w.device
-
-    # One sparse operator over the FLATTENED batch. The batch graph is block diagonal -- no edge
-    # crosses shapes -- so a single [B*N, B*N] matrix holds all of them and one `sparse.mm`
-    # replaces a [B,N,k,m] gather that would be materialised on every iteration (at m=144 that
-    # array is 44M elements, and the iteration is memory-bound on it).
-    off = (torch.arange(B, device=dev) * N).view(B, 1, 1)
-    src = (torch.arange(N, device=dev).view(1, N, 1) + off).expand(B, N, k).reshape(-1)
-    dst = (idx + off).reshape(-1)
-    val = 0.5 * w.reshape(-1)
-    ii = torch.cat([src, dst])                      # both directions; coalesce sums duplicates,
-    jj = torch.cat([dst, src])                      # which is exactly (W + W^T)/2
-    vv = torch.cat([val, val])
-
-    def build(v):
-        return torch.sparse_coo_tensor(torch.stack([ii, jj]), v, (B * N, B * N)).coalesce()
-
-    deg = build(vv) @ torch.ones(B * N, 1, device=dev, dtype=w.dtype)
-    r = deg.squeeze(-1).clamp_min(EPS).rsqrt()
-    A = build(vv * r[ii] * r[jj])                   # D^-1/2 W D^-1/2, symmetric by construction
-
-    def apply(V):                                   # [B,N,m] -> [B,N,m]
-        return (A @ V.reshape(B * N, -1)).view(B, N, -1)
-
-    def orth(M):                                    # Cholesky-QR: two thin matmuls, tiny chol
-        # in the working dtype, with a jitter scaled to the Gram diagonal; a Cholesky failure
-        # (near-rank-deficient block) falls back to float64 rather than to a slower default,
-        # because doing every iteration in float64 costs more than the whole rest of the method
-        G = M.transpose(1, 2) @ M
-        eye = torch.eye(G.shape[-1], device=M.device, dtype=G.dtype).unsqueeze(0)
-        jit = 1e-6 * torch.diagonal(G, dim1=1, dim2=2).mean(-1).clamp_min(EPS).view(-1, 1, 1)
-        try:
-            L = torch.linalg.cholesky(G + jit * eye)
-        except Exception:                           # noqa: BLE001
-            L = torch.linalg.cholesky((G + jit * eye).double()).to(G.dtype)
-        # Measured: an explicit inv(L) plus a matmul, which looks cheaper on paper, is SLOWER
-        # here (44.8 vs 38.9 ms/shape at m=144) -- the batched triangular solve wins.
-        return torch.linalg.solve_triangular(L, M.transpose(1, 2), upper=False).transpose(1, 2)
-
-    m = min(N, n_sp + over)
-    gen = torch.Generator(device='cpu').manual_seed(0)
-    X = orth(torch.randn(B, N, m, generator=gen).to(w.device, w.dtype))
-    prev = None
-    for it in range(iters):
-        X = orth(apply(X) + X)                      # (S + I) keeps the spectrum positive
-        if it % 5 == 4:                             # stop once the Ritz values settle
-            T = X.transpose(1, 2) @ apply(X)
-            ev = torch.linalg.eigvalsh(0.5 * (T + T.transpose(1, 2)))
-            if prev is not None and (ev - prev).abs().max() < 1e-4:
-                break
-            prev = ev
-    T = X.transpose(1, 2) @ apply(X)
-    ev, U = torch.linalg.eigh(0.5 * (T + T.transpose(1, 2)))
-    return F.normalize((X @ U)[:, :, -n_sp:], dim=-1).contiguous()
-
-
 def relabel(lab, w, idx, K, rounds=3):
     """Snap region borders onto the weak edges of the graph.
 
     k-means places each point independently, so borders come out ragged and cut across strong
-    edges.  Each round every point takes the label its strongest neighbours carry.
+    edges.  Each round every point takes the label its strongest neighbours carry.  This is also
+    the only route by which the concavity cue reaches the partition, since k-means clusters
+    per-point features and concavity is an edge quantity: it moves boundary recall 69.5 -> 72.7
+    and the end task by +0.05, so it is about boundaries, not about accuracy.
     """
     B, N, k = idx.shape
     for _ in range(rounds):
         sc = torch.zeros(B, N, K, device=lab.device, dtype=w.dtype)
-        sc.scatter_add_(2, lab.gather(1, idx.reshape(B, -1)).reshape(B, N, k), w)
+        sc.scatter_add_(2, gather_s(lab, idx), w)
         new = sc.argmax(-1)
         if torch.equal(new, lab):
             break
@@ -246,80 +166,35 @@ def relabel(lab, w, idx, K, rounds=3):
     return lab
 
 
-def split_and_clean(lab, idx, min_size=4):
-    """Cut every cluster into its connected components, absorb fragments, return flat ids.
-
-    A cluster is a set of points that agreed in cue space; nothing so far forces it to be one
-    connected piece, and a region made of two distant blobs pools two different parts together.
-    """
-    B, N, k = idx.shape
-    flat = idx.reshape(B, -1)
-    same = lab.unsqueeze(2) == lab.gather(1, flat).reshape(B, N, k)
-    comp = torch.arange(N, device=lab.device).expand(B, N).clone()
-    for _ in range(int(N).bit_length()):            # pointer jumping: O(log N), not O(N)
-        pull = comp.gather(1, flat).reshape(B, N, k).masked_fill(~same, N).min(-1)[0]
-        push = comp.unsqueeze(2).expand(B, N, k).masked_fill(~same, N).reshape(B, -1)
-        new = torch.minimum(comp, pull).scatter_reduce(1, flat, push, 'amin')
-        new = new.gather(1, new)                                     # pointer jumping
-        if torch.equal(new, comp):
-            break
-        comp = new
-    key = lab * N + comp
-    key = torch.arange(B, device=lab.device).unsqueeze(1) * (int(key.max()) + 1) + key
-    seg = torch.unique(key, return_inverse=True)[1].reshape(-1)
-
-    nb = (idx + (torch.arange(B, device=idx.device) * N).view(B, 1, 1)).reshape(B * N, k)
-    for _ in range(3):
-        cnt = torch.bincount(seg, minlength=int(seg.max()) + 1)
-        small = cnt[seg] < min_size
-        if not small.any():
-            break
-        big = ~small[nb]
-        first = big.to(torch.uint8).argmax(1)
-        cand = seg[nb.gather(1, first.unsqueeze(1)).squeeze(1)]
-        seg = torch.where(small & big.any(1), cand, seg)
-    return torch.unique(seg, return_inverse=True)[1]
-
-
-def superpoints(xyz, nrm, fpfh, n_sp=32, k=10, rounds=3, part='kmeans', iters=50,
-                seed='fps'):
+def superpoints(xyz, nrm, fpfh, n_sp=32, k=10, rounds=3):
     """[B,N] coordinates + normals + FPFH -> flat [B*N] region ids, grouped by shape.
 
-    `part='kmeans'` clusters the cues directly; `part='spectral'` clusters a normalised-cut
-    embedding of the same cue affinity, which is a better partition at a matched region count
-    and about three times the cost.
+    `n_sp=32` is measured on the END TASK, not on the partition: oracle IoU keeps climbing with
+    resolution (69.9 at 16 regions -> 87.2 at 128) while class-mIoU peaks at 32 and then falls,
+    because smaller regions average fewer features and that variance costs more than the raised
+    ceiling gains.  Do not tune this on oracle IoU.
     """
     idx = knn(xyz, k)
     X, g, n = cue_features(xyz, nrm, fpfh, idx)
-    w = affinity(xyz, n, g, idx) if (rounds or part == 'spectral') else None
-    if part == 'cutpursuit':
-        from partseg.cutpursuit import cutpursuit
-        lab = cutpursuit(X, w, idx, lam=1.0, rounds=max(1, int(n_sp - 1).bit_length()))
-    else:
-        lab = kmeans(spectral(w, idx, n_sp, iters), xyz, n_sp, seed=seed) \
-            if part == 'spectral' else kmeans(X, xyz, n_sp, seed=seed)
+    lab = kmeans(X, xyz, n_sp)
     if rounds:
-        lab = relabel(lab, w, idx, int(lab.max()) + 1, rounds)
+        lab = relabel(lab, affinity(xyz, n, g, idx), idx, n_sp, rounds)
     return split_and_clean(lab, idx)
 
 
 # --------------------------------------------------------------------------- #
 #  pool, classify, propagate                                                   #
 # --------------------------------------------------------------------------- #
-def simple_geoze(xyz, nrm, fpfh, feat, text, n_sp=32, k=10, rounds=3, part='kmeans',
-                 seed='fps'):
+def simple_geoze(xyz, nrm, fpfh, feat, text, n_sp=32, k=10, rounds=3):
     """Per-point part labels [B,N].  `feat` [B,N,D] VLM features, `text` [C,D] L2-normalised."""
     B, N, D = feat.shape
-    seg = superpoints(xyz, nrm, fpfh, n_sp, k, rounds, part, seed=seed)
-    S = int(seg.max()) + 1
+    seg = superpoints(xyz, nrm, fpfh, n_sp, k, rounds)
 
-    f = F.normalize(feat.reshape(B * N, D), dim=-1)
-    valid = (feat.reshape(B * N, D).norm(dim=-1) > 0).to(f.dtype)      # unseen points: no feature
-    num = f.new_zeros(S, D).index_add_(0, seg, f * valid.unsqueeze(1))
-    den = f.new_zeros(S, 1).index_add_(0, seg, valid.unsqueeze(1))
-    z = F.normalize(num / den.clamp_min(EPS), dim=-1)                  # [S,D] region features
+    f = feat.reshape(B * N, D)
+    valid = (f.norm(dim=-1) > 0).to(f.dtype)               # unseen points carry no feature
+    z = F.normalize(seg_mean(F.normalize(f, dim=-1), seg, int(seg.max()) + 1, w=valid), dim=-1)
 
-    return (z @ text.t()).argmax(-1)[seg].view(B, N)                   # classify, then propagate
+    return (z @ text.t()).argmax(-1)[seg].view(B, N)       # classify regions, propagate labels
 
 
 # --------------------------------------------------------------------------- #
@@ -330,30 +205,29 @@ def main():
     from libs.lib_metric import calculate_shape_IoU, seg_num
     from partseg.partclip import clip
     from partseg.partmodel.best_param import best_vweight
-    from partseg.partmodel.eval_v2 import load_class
     from partseg.partmodel.post_search import cat2id, textual_encoder
     from partseg.rendering.unprojection import vanilla_upprojection
+    from partseg.shapenet import load_class
 
     ap = argparse.ArgumentParser()
-    ap.add_argument('--classchoice', default='all')
+    ap.add_argument('--classchoice', default='all', help='a category, a comma list, or all')
+    ap.add_argument('--modelname', default='ViT-B/16')
     ap.add_argument('--n_sp', type=int, default=32)
     ap.add_argument('--knn', type=int, default=10)
     ap.add_argument('--rounds', type=int, default=3)
-    ap.add_argument('--part', default='kmeans',
-                    choices=['kmeans', 'spectral', 'cutpursuit'])
-    ap.add_argument('--seed', default='fps', choices=['fps', 'curve'])
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--device', default='cuda:0')
     ap.add_argument('--bs', type=int, default=15)
+    ap.add_argument('--out', default='', help='json with per-category results')
     args = ap.parse_args()
     dev = args.device if torch.cuda.is_available() else 'cpu'
     classes = list(cat2id) if args.classchoice == 'all' else args.classchoice.split(',')
 
-    model, _ = clip.load('ViT-B/16', device=dev)
+    model, _ = clip.load(args.modelname, device=dev)
     model.eval()
-    per_class, all_ious, ms = [], [], []
+    per_class, all_ious, ms, by_class = [], [], [], {}
     for c in classes:
-        d = load_class(c, 'ViT-B/16')
+        d = load_class(c, args.modelname)
         n = min(args.limit, d['pc'].shape[0]) if args.limit else d['pc'].shape[0]
         text = F.normalize(textual_encoder(model, c, device=dev)[0].float(), dim=-1)
         vw = torch.tensor(best_vweight[c], device=dev)
@@ -367,24 +241,31 @@ def main():
             if dev.startswith('cuda'):
                 torch.cuda.synchronize()
             t0 = time.time()
-            p_ = simple_geoze(xyz, nrm, fp, feat, text, args.n_sp, args.knn,
-                              args.rounds, args.part, args.seed)
+            p = simple_geoze(xyz, nrm, fp, feat, text, args.n_sp, args.knn, args.rounds)
             if dev.startswith('cuda'):
                 torch.cuda.synchronize()
             ms.append((time.time() - t0) * 1e3 / xyz.shape[0])
-            preds.append(p_.cpu())
+            preds.append(p.cpu())
             labs.append(d['label'][s:e])
         pred, lab = torch.cat(preds).numpy(), torch.cat(labs).numpy()
         ious = np.array(calculate_shape_IoU(pred, lab, np.full(pred.shape[0], cat2id[c]),
                                             c, eva=True)[0])
         per_class.append(ious.mean() * 100)
         all_ious.append(ious)
+        by_class[c] = float(ious.mean() * 100)
         print(f'  {c:12s} n={pred.shape[0]:4d}  IoU {ious.mean() * 100:6.2f}', flush=True)
-    print(f'\nRESULT simple_geoze  class-mIoU={np.mean(per_class):.2f}  '
-          f'instance-mIoU={np.concatenate(all_ious).mean() * 100:.2f}  '
-          f'{np.mean(ms[1:] if len(ms) > 1 else ms):.2f} ms/shape  '
-          f'({args.part}/{args.seed}, n_sp={args.n_sp}, refine={args.rounds}, '
-          f'{len(classes)} classes)', flush=True)
+
+    summary = dict(class_miou=float(np.mean(per_class)),
+                   instance_miou=float(np.concatenate(all_ious).mean() * 100),
+                   ms=float(np.mean(ms[1:] if len(ms) > 1 else ms)))
+    print(f"\nRESULT simple_geoze  class-mIoU={summary['class_miou']:.2f}  "
+          f"instance-mIoU={summary['instance_miou']:.2f}  {summary['ms']:.2f} ms/shape  "
+          f'(n_sp={args.n_sp}, refine={args.rounds}, {len(classes)} classes)', flush=True)
+    if args.out:
+        import json
+        os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
+        json.dump({**summary, 'by_class': by_class, 'args': vars(args)}, open(args.out, 'w'),
+                  indent=1)
 
 
 if __name__ == '__main__':

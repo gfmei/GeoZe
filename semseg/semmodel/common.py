@@ -2,18 +2,9 @@
 import torch
 import torch.nn.functional as F
 
-EPS = 1e-8
-
-
-def seg_mean(vals, seg, S, w=None):
-    """Weighted per-segment mean of [N,D] -> [S,D].  w: [N] or None."""
-    D = vals.shape[1]
-    num = vals.new_zeros(S, D)
-    den = vals.new_zeros(S, 1)
-    ww = torch.ones_like(vals[:, :1]) if w is None else w.unsqueeze(1).to(vals.dtype)
-    num.index_add_(0, seg, vals * ww)
-    den.index_add_(0, seg, ww)
-    return num / den.clamp_min(EPS)
+# `seg_mean` lives in common/pointops.py: both pipelines reduce over a segmentation and there is
+# no reason for two definitions of it to drift apart.
+from common.pointops import EPS, seg_mean  # noqa: F401  (re-exported)
 
 
 def batched_eigh(C, chunk=32768):

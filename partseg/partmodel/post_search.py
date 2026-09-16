@@ -63,12 +63,6 @@ def textual_encoder(clip_model, class_choice, searched_prompt=None, device='cuda
     return text_feat, sents
 
 
-def simple_prompts(class_choice):
-    """`a {part} of a {category}` — a neutral template, not searched against any layout."""
-    from partseg.shapenet import cat2part
-    return [f'a {part} of a {class_choice}' for part in cat2part[class_choice]]
-
-
 def read_prompts():
     f = open('prompts/shapenetpart_700.json')
     data = json.load(f)

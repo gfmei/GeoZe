@@ -45,7 +45,7 @@ Deploying the Space needs `git lfs track "data/*.npz"` before the first commit �
 scenes are ~62 MB. Full instructions in [`demo/README.md`](demo/README.md).
 
 ## News
-* We release **PartGeoZe v2**, the object-level pipeline for zero-shot part segmentation — **~16x faster** than GeoZe on ShapeNetPart 🔥.
+* We release **SimpleGeoZe**, the object-level pipeline for zero-shot part segmentation — **~24x faster** than GeoZe on ShapeNetPart 🔥.
 * We release **SemGeoZe v2**, the scene-level pipeline for zero-shot semantic segmentation — **~26x faster** than GeoZe on ScanNet 🔥.
 * We release the code for zero-shot 3D part segmentation 🔥.
 * Our paper has been accepted by CVPR 2024 🔥.
@@ -171,18 +171,14 @@ misalignment that no aggregation can close. On nuScenes, two setup choices matte
 the aggregation: the 43-label detail vocabulary (+8.5 mIoU over the 16 eval names) and using the
 text tower the 2D backbone was aligned to. Per-stage ablations are in `semseg/out/`.
 
-## PartGeoZe v2: geometrically-driven aggregation for part segmentation
+## SimpleGeoZe: geometrically-driven aggregation for part segmentation
 
 `partseg/` re-derives the aggregation for **objects** the way `semseg/` did for scenes. GeoZe
-builds a $knn$ patch around every superpoint and runs Sinkhorn attention inside each; v2 replaces
-that with a geometry-only partition, a mean pool inside each region, and a classification of the
-region vectors whose label is propagated to points. Full details, every ablation and every dead
-end: **[`partseg/README.md`](partseg/README.md)**.
-
-The whole method that survived measurement fits in one file with no options,
-[`partseg/simple_geoze.py`](partseg/simple_geoze.py) — partition, pool, classify the regions,
-propagate the label — and it is both the fastest and the most accurate configuration we measured.
-Read it before `partseg/partmodel/`.
+builds a $knn$ patch around every superpoint and runs Sinkhorn attention inside each;
+[`partseg/simple_geoze.py`](partseg/simple_geoze.py) replaces that with a geometry-only
+partition, a mean pool inside each region, and a classification of the region vectors whose label
+is propagated to points. It is one file with no options. Full details and every rejected
+alternative: **[`partseg/README.md`](partseg/README.md)**.
 
 ### Results — ShapeNetPart test, all 16 categories
 
@@ -192,69 +188,15 @@ Aggregation only (partition, pooling, classification), one A100, batches of 15 s
 |---|---|---|---|
 | per-point argmax | 50.53 | 51.59 | 0.03 |
 | farthest-point Voronoi + pooling | 53.59 | 54.91 | 1.07 |
-| **PartGeoZe v2** (`simple_geoze.py`) | **54.82** | **55.59** | **1.72** |
-| PartGeoZe v2 (full pipeline, k-means) | 54.59 | 55.47 | 2.65 |
-| **PartGeoZe v2** (sparse spectral) | **54.44** | **55.32** | 8.54 |
-| VCCS + pooling | 53.92 | 55.08 | 36.71 |
-| **VCCS on the kNN graph**, batched | **54.47** | **55.52** | 5.09 |
+| **SimpleGeoZe** | **54.82** | **55.59** | **1.62** |
 | GeoZe | **56.12** | **57.18** | 40.30 |
-| partition oracle | 85.79 | 87.04 | — |
+| partition oracle | 85.91 | 86.49 | — |
 
-**The trade is stated plainly: v2 does not beat GeoZe on accuracy.** It is **1.7 class-mIoU behind
-at 4.7x the speed**, or 1.9 behind at **15.7x**. What it beats is pooling over a naive partition
-(+0.85) and per-point classification (+3.9). The contribution here is speed and a better
-partition, not accuracy — the opposite emphasis to a headline number would misrepresent it.
+**The trade is stated plainly: SimpleGeoZe does not beat GeoZe on accuracy.** It is **1.30
+class-mIoU behind at 24x the speed**, and 4.3 ahead of per-point classification. The contribution
+is speed, not accuracy.
 
-### Superpoints from geometry
-
-The partition is built from position, unsigned normals and FPFH only — never the VLM feature, so
-a noisy feature can not corrupt the regions it will later be pooled over. Two additions matter:
-
-* **A concavity cue.** Object parts meet at *concave* seams (seat/leg, wing/body), which is the
-  LCCP criterion, so the affinity penalises concave edges and leaves convex ones free. It needs
-  consistently oriented normals, and the cached ones are unoriented, so the signs are resolved by
-  relaxing an Ising problem over the $knn$ graph. Boundary recall 71.1 → 72.7.
-* **A VCCS option, in two forms.** `--part vccs` runs the same supervoxels `semseg` uses on
-  ScanNet, adapted to object scale (colour cue dropped, voxel size raised above the point
-  spacing, a target count via FPS seeding). `--part vccs_gpu` ports the *algorithm* onto the
-  point $knn$ graph — Eq. 1 without colour, flow-constrained growth, claims resolved by minimum
-  distance — so it batches on the GPU: **8x faster, +1.9 oracle IoU, and the best end-task
-  number of any partition here (54.47)**. It is not a drop-in replacement, though: a lattice
-  adjacency grows compact blobs and a surface adjacency grows smooth regions, so boundary recall
-  falls 86.5 → 70.0. Both are kept.
-* **A sparse spectral solve.** The operator is only ever *applied* — a gather for $Wx$ and the
-  matching scatter-add for $W^{\top}x$ — so nothing $N \times N$ is allocated. At matched region
-  counts it equals or beats a full eigendecomposition at **2–6x less time**, which makes the dense
-  solve strictly dominated.
-
-| ~regions | dense spectral | sparse spectral | k-means + refinement |
-|---|---|---|---|
-| 66–68 | 84.20 @ 37.3 ms | 83.69 @ 8.8 ms | 83.00 @ 2.2 ms |
-| 98–103 | 85.93 @ 37.2 ms | 86.56 @ 19.5 ms | 85.95 @ 2.2 ms |
-| 128–132 | 87.24 @ 37.2 ms | 87.78 @ 23.8 ms | 87.17 @ 2.1 ms |
-
-k-means in the same cue space matches the full spectral solve once you ask for ≥96 regions, at a
-seventeenth of the time: **the cues carry the partition, not the clustering algorithm.**
-
-### Cut pursuit, batched on the GPU
-
-[`partseg/cutpursuit.py`](partseg/cutpursuit.py) rewrites cut pursuit (Landrieu &
-Obozinski 2017, the Superpoint Graph partition) for the GPU, against the NumPy + PyMaxflow
-reference. Everything in it batches except the split step, which the reference does by an exact
-max-flow per component; replacing that with a parallel local search **costs nothing measurable**
-(oracle IoU agrees to within 0.04 at every resolution) and runs **3.0–3.7x faster**.
-
-It also produces the **best partition we measured** — 88.17 oracle IoU at 126 regions, against
-87.78 for sparse spectral and 87.17 for k-means — **and the worse end-task result**, 53.75
-class-mIoU against 54.82. The reason is region size: cut pursuit splits where the geometric
-signal varies, so 6.2% of its regions hold fewer than 8 points against 2.0% for k-means, and a
-region that pools nine features has a correspondingly noisy mean.
-
-### Two results that constrain any claim
-
-**The partition is not what limits the task.** Sweeping resolution moves the ceiling a long way
-and the result barely at all — and past 32 superpoints the result gets *worse*, because smaller
-regions average fewer features and that noise costs more than the higher ceiling gains:
+### The partition is not what limits the task
 
 | superpoints | oracle class-mIoU | end-task class-mIoU |
 |---|---|---|
@@ -263,14 +205,13 @@ regions average fewer features and that noise costs more than the higher ceiling
 | 64 | 82.42 | 53.89 |
 | 128 | 87.23 | 53.48 |
 
-Roughly 31 points separate the best result from its own oracle, and that gap is VLM/text
-misalignment which no partition can close. Tune the superpoint count on the end task, never on
-oracle IoU.
-
-**The scene pipeline's merging stage does not transfer.** SemGeoZe v2's load-bearing step costs
-**−1.81 class-mIoU** here. No cue separates adjacent same-part from different-part regions: over
-ten categories the best AUC is 0.67 and the worst 0.43, and adjacent regions sit at cosine 0.99
-either way. It is kept implemented and switchable (`--rounds 10`), off by default.
+A $17$-point rise in the ceiling buys at most $2$ points of result, and past the optimum it buys
+less than nothing — smaller regions average fewer features, and that variance costs more than the
+raised ceiling gains. Roughly $31$ class-mIoU separate the result from its own oracle, and that
+gap is VLM/text misalignment. We measured a dozen richer designs against this one — hierarchical
+merging (the `semseg` stage, $-1.81$ here), intra/inter attention, cut pursuit, spectral and VCCS
+partitions, Nystr\"om and LOBPCG solvers — and none of them won; `partseg/README.md` lists each
+with its number.
 
 ## Usage
 
@@ -305,16 +246,11 @@ python -c "from semseg.semmodel.post_search import search_prompt; \
 
 ```bash
 cd partseg
-# first run caches the multi-view CLIP features under output/; later runs reuse them
-python part_run.py --classchoice all --datasetpath Your_shapenet_path   # PartGeoZe v2
-python part_run.py --classchoice all --baseline meanpool                # pooling, the baseline
-python part_run.py --classchoice all --baseline point                   # no aggregation
-python part_run.py --classchoice all --baseline oracle                  # the partition's ceiling
-python part_run.py --classchoice all --model geoze                      # the original GeoZe
+# once per category: caches the CLIP pass over ten rendered views under output/
+python part_run.py --classchoice all --datasetpath Your_shapenet_path --extract_only
 
-python part_run.py --classchoice all --part spectral --embed sparse     # the spectral partition
-python bench_part.py --cls chair                                        # stage-by-stage timing
-python probe_superpoints.py                                             # partition quality sweep
+python simple_geoze.py --classchoice all     # SimpleGeoZe, the method this repo ships
+python part_run.py --classchoice all         # the original GeoZe, for comparison
 ```
 
  Semantic segmentation — **ScanNet v2** ([docs](semseg/README.md))
@@ -356,7 +292,7 @@ nuscenes_multiview_openseg_val/<scene>.pt          fused OpenSeg features (768-d
 ```
 
 ## TODO
-- [x] Provide code for part segmentation ([PartGeoZe v2](partseg/README.md))
+- [x] Provide code for part segmentation ([SimpleGeoZe](partseg/README.md))
 - [x] Provide code for scene semantic segmentation ([ScanNet](semseg/README.md), [nuScenes](semseg/README_nuscenes.md))
 - [x] Support in-website demo (GitHub Pages viewer + HuggingFace Space)
 
@@ -371,9 +307,9 @@ The original GeoZe (CVPR 2024) is by Guofeng Mei, Luigi Riz, Yiming Wang and Fab
 the space-filling-curve serialization that replaces the KD-tree, and the multi-curve voting
 neighbour graph that makes it both cheaper and more accurate than exact kNN.
 
-**PartGeoZe v2** (`partseg/partmodel/spectral.py`, `partseg/partmodel/partgeozev2.py`) carries the
-same design to objects: the geometry-only superpoints with a concavity cue, and the sparse
-spectral solve that never forms the affinity matrix.
+**SimpleGeoZe** (`partseg/simple_geoze.py`) carries the same design to objects: geometry-only
+superpoints with a concavity cue, a region pool, and a classification of the region vectors whose
+label is propagated to points.
 
 ## Citation
 If you find our code or paper useful, please cite
