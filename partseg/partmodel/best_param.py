@@ -127,8 +127,14 @@ best_param_v2 = dict(
     n_land=256,            # Nystrom landmarks
     ortho=False,           # Fowlkes' orthogonalised extension costs a second m x m eigh
                            # (10.69 vs 5.40 ms/shape) and k-means only needs the directions
-    land='curve', seed='curve',   # Hilbert-curve stride instead of farthest-point sampling:
-                           # FPS is a Python loop over the sample count, 2.89 -> 0.27 ms/shape
+    land='curve',          # Nystrom LANDMARKS by Hilbert-curve stride: farthest-point sampling
+                           # is a Python loop over the sample count, and at 256 landmarks that
+                           # cost 2.89 ms/shape against 0.27 for the curve.
+    seed='fps',            # k-means SEEDS by farthest-point sampling, which is the opposite
+                           # call and a measured one: at 32 seeds the loop is 32 iterations
+                           # (+0.16 ms) and the better spread is worth +0.41 class-mIoU
+                           # (54.59 vs 54.18).  Do not unify these two knobs -- the trade flips
+                           # with the sample count.
     refine=3,              # rounds of affinity-weighted boundary refinement.  This is the only
                            # route by which the CONCAVITY cue reaches a k-means partition, since
                            # k-means clusters per-point features and concavity is an edge

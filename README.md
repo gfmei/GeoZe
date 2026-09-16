@@ -179,6 +179,11 @@ that with a geometry-only partition, a mean pool inside each region, and a class
 region vectors whose label is propagated to points. Full details, every ablation and every dead
 end: **[`partseg/README.md`](partseg/README.md)**.
 
+The whole method that survived measurement fits in one file with no options,
+[`partseg/simple_geoze.py`](partseg/simple_geoze.py) — partition, pool, classify the regions,
+propagate the label — and it is both the fastest and the most accurate configuration we measured.
+Read it before `partseg/partmodel/`.
+
 ### Results — ShapeNetPart test, all 16 categories
 
 Aggregation only (partition, pooling, classification), one A100, batches of 15 shapes.
@@ -187,7 +192,8 @@ Aggregation only (partition, pooling, classification), one A100, batches of 15 s
 |---|---|---|---|
 | per-point argmax | 50.53 | 51.59 | 0.03 |
 | farthest-point Voronoi + pooling | 53.59 | 54.91 | 1.07 |
-| **PartGeoZe v2** (k-means + refinement) | 54.18 | 55.26 | **2.57** |
+| **PartGeoZe v2** (`simple_geoze.py`) | **54.82** | **55.59** | **1.72** |
+| PartGeoZe v2 (full pipeline, k-means) | 54.59 | 55.47 | 2.65 |
 | **PartGeoZe v2** (sparse spectral) | **54.44** | **55.32** | 8.54 |
 | VCCS + pooling | 53.92 | 55.08 | 36.71 |
 | **VCCS on the kNN graph**, batched | **54.47** | **55.52** | 5.09 |

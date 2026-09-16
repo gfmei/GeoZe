@@ -178,6 +178,29 @@ you want.
 spectral and 0.29 over the k-means default — which is itself the point: see
 [the partition is not what limits the end task](#the-partition-is-not-what-limits-the-end-task).
 
+## The short version
+
+[`simple_geoze.py`](simple_geoze.py) is the whole method that survived measurement, written
+linearly in one file with no options: partition, pool, classify the regions, propagate the label.
+It is both the **fastest and the most accurate** configuration here, which is the honest summary
+of this whole investigation — the machinery that is absent from it is absent because it was
+measured and did not pay.
+
+```bash
+python simple_geoze.py --classchoice all      # 54.82 class-mIoU, 1.72 ms/shape
+```
+
+| | class-mIoU | ms/shape |
+|---|---|---|
+| `simple_geoze.py`, 32 superpoints | **54.82** | **1.72** |
+| the same without boundary refinement | 54.77 | 1.48 |
+| full pipeline, `--part kmeans` | 54.59 | 2.65 |
+| GeoZe | 56.12 | 40.30 |
+
+Read it before `partmodel/`: the package carries four partitions, four eigensolvers, a merging
+stage and an attention stage because each had to be measured, and almost none of it earned its
+place.
+
 ## Usage
 
 ```bash
@@ -252,7 +275,8 @@ the aggregation only (partition, pooling, classification), one A100, batches of 
 | **PartGeoZe v2**, k-means + refinement, 32 | 54.18 | 55.26 | 77.32 | **2.57** |
 | **PartGeoZe v2**, sparse spectral, 32 | **54.44** | **55.32** | **77.52** | 8.54 |
 | VCCS + pooling, 64 | 53.92 | 55.08 | 77.21 | 36.71 |
-| **VCCS on the kNN graph (`vccs_gpu`), 32** | **54.47** | **55.52** | 77.39 | 5.09 |
+| **VCCS on the kNN graph (`vccs_gpu`), 32** | 54.47 | 55.52 | 77.39 | 5.09 |
+| **`simple_geoze.py`, 32** | **54.82** | **55.59** | — | **1.72** |
 | GeoZe (`partgeoze.py`) | **56.12** | **57.18** | **78.37** | 40.30 |
 | partition oracle (sparse, 48) | 85.79 | 87.04 | 95.43 | — |
 
@@ -299,6 +323,7 @@ partition can close. Tune `n_sp` on the end task, never on oracle IoU.
 | multi-curve kNN | -0.9 oracle, -10 boundary recall | exact kNN is already 0.19 ms at 2048 points |
 | boundary refinement on a spectral embedding | +0.04 oracle | it only pays on k-means, where it is the concavity cue's only route in |
 | Zelnik-Manor local scaling | ~0 | |
+| Hilbert-curve k-means seeding | **-0.41** class-mIoU | adopted to kill a cost that only exists at 256 Nystrom landmarks; at 32 cluster seeds the loop is 32 iterations and the spread matters. `seed='fps'`, `land='curve'` |
 | VCCS supervoxels | -0.5 class-mIoU at 14x the cost | best boundary recall here, but lower oracle at matched regions, and CPU-bound |
 | VCCS boundary-aware BFS | 81.03 vs 81.37 oracle (CPU), 83.57 vs 83.29 (GPU) | within noise either way |
 | more landmarks (512) | worse everywhere | |
@@ -311,6 +336,7 @@ bash run_default.sh      # the shipped configuration
 bash run_solver.sh       # sparse vs k-means on the end task
 bash run_layout.sh       # the feature-layout ablation
 bash run_vccs.sh         # the VCCS partition, end task and ceiling
+python simple_geoze.py --classchoice all   # the one-file version
 python probe_superpoints.py --n_sp 32 48 64 96 128   # partition quality at matched counts
 python bench_part.py --cls chair                     # stage-by-stage timing
 ```
